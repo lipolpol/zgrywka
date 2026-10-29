@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QStyle, QVBoxLayout, QWidget,
@@ -16,28 +16,41 @@ _ALTERNATIVES_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class PersonDialog(QDialog):
-    """Okno osoby: imię i nazwisko (nazwy folderów i plików) oraz alternatywy, np. Wera, Nika, Werka."""
+    """Okno osoby: imię i nazwisko (nazwy folderów i plików) oraz alternatywy, np. Wera, Nika, Werka.
+    Alternatywy wpisuje się po jednej: nazwa + Enter, następna + Enter..., na koniec "Zapisz"."""
 
     def __init__(self, parent=None, name: str = "", alternatives=(), taken: set[str] = frozenset()):
         super().__init__(parent)
         self.setWindowTitle("Osoba" if name else "Nowa osoba")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(500)
         self._taken = {t.casefold() for t in taken}
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.name_edit = QLineEdit(name)
         self.name_edit.setPlaceholderText("np. Weronika Chrabąszcz")
         form.addRow("Imię i nazwisko:", self.name_edit)
-        self.alternatives_edit = QLineEdit(", ".join(alternatives))
-        self.alternatives_edit.setPlaceholderText("np. Wera, Nika, Werka")
-        form.addRow("Alternatywy:", self.alternatives_edit)
+        self.alternative_edit = QLineEdit()
+        self.alternative_edit.setPlaceholderText("wpisz np. Wera i naciśnij Enter, potem kolejną…")
+        form.addRow("Alternatywy:", self.alternative_edit)
+        self.alternatives_list = QListWidget()
+        self.alternatives_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.alternatives_list.setToolTip("Dwuklik – popraw alternatywę, Delete – usuń zaznaczone")
+        self.alternatives_list.setMaximumHeight(140)
+        for alternative in alternatives:
+            self.alternatives_list.addItem(alternative)
+        list_box = QVBoxLayout()
+        list_box.addWidget(self.alternatives_list)
+        self.remove_button = QPushButton("Usuń zaznaczone alternatywy")
+        self.remove_button.clicked.connect(self._remove_selected)
+        list_box.addWidget(self.remove_button)
+        form.addRow("", list_box)
         layout.addLayout(form)
         hint = QLabel(
             "Imię i nazwisko trafi do nazw folderów i plików.<br>"
             "<b>Alternatywy</b> to inne formy, po których program też rozpozna tę osobę: zdrobnienia, "
-            "przezwiska albo pełne imię (oddziel je przecinkami, np. <i>Wera, Nika, Werka</i> albo "
-            "<i>Radosław Chaberko</i>).<br>Przekręconych liter i odmiany (np. „Weroniki”, „Hrabąszcz”) "
-            "nie trzeba wpisywać – program wyłapuje je sam.")
+            "przezwiska albo pełne imię (np. <i>Wera</i>, <i>Nika</i>, <i>Werka</i> albo <i>Radosław Chaberko</i>). "
+            "Wpisz jedną, naciśnij <b>Enter</b> i wpisz kolejną.<br>Przekręconych liter i odmiany "
+            "(np. „Weroniki”, „Hrabąszcz”) nie trzeba wpisywać – program wyłapuje je sam.")
         hint.setWordWrap(True)
         hint.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(hint)
@@ -47,12 +60,56 @@ class PersonDialog(QDialog):
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-        (self.alternatives_edit if name else self.name_edit).setFocus()
+
+        self.name_edit.returnPressed.connect(self.alternative_edit.setFocus)
+        self.alternative_edit.returnPressed.connect(self.add_alternative)
+        self.alternatives_list.itemDoubleClicked.connect(self._edit_item)
+        self.alternatives_list.installEventFilter(self)
+        (self.alternative_edit if name else self.name_edit).setFocus()
+
+    def keyPressEvent(self, event):
+        # Enter w polach tylko dodaje alternatywę (albo przechodzi dalej) - okno zamyka przycisk "Zapisz"
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and \
+                self.focusWidget() in (self.name_edit, self.alternative_edit, self.alternatives_list):
+            return
+        super().keyPressEvent(event)
+
+    def eventFilter(self, watched, event):
+        if watched is self.alternatives_list and event.type() == QEvent.Type.KeyPress and \
+                event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self._remove_selected()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _current_alternatives(self) -> list[str]:
+        return [self.alternatives_list.item(i).text() for i in range(self.alternatives_list.count())]
+
+    def add_alternative(self) -> None:
+        """Enter w polu "Alternatywy": dopisuje wpisaną nazwę do listy i czyści pole."""
+        name = " ".join(self.name_edit.text().split()).casefold()
+        existing = {a.casefold() for a in self._current_alternatives()}
+        for alternative in parse_alternatives(self.alternative_edit.text()):
+            if alternative.casefold() not in existing and alternative.casefold() != name:
+                self.alternatives_list.addItem(alternative)
+                existing.add(alternative.casefold())
+        self.alternative_edit.clear()
+        self.alternative_edit.setFocus()
+
+    def _remove_selected(self) -> None:
+        for item in self.alternatives_list.selectedItems():
+            self.alternatives_list.takeItem(self.alternatives_list.row(item))
+
+    def _edit_item(self, item: QListWidgetItem) -> None:
+        self.alternative_edit.setText(item.text())
+        self.alternatives_list.takeItem(self.alternatives_list.row(item))
+        self.alternative_edit.setFocus()
 
     def values(self) -> tuple[str, list[str]]:
         name = " ".join(self.name_edit.text().split())
-        alternatives = [a for a in parse_alternatives(self.alternatives_edit.text()) if a.casefold() != name.casefold()]
-        return name, alternatives
+        # to, co zostało wpisane w polu bez naciśnięcia Enter, też się liczy
+        pending = parse_alternatives(self.alternative_edit.text())
+        alternatives = parse_alternatives("\n".join(self._current_alternatives() + pending))
+        return name, [a for a in alternatives if a.casefold() != name.casefold()]
 
     def _accept(self) -> None:
         name, _ = self.values()

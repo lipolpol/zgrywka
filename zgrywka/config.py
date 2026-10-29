@@ -80,6 +80,7 @@ class Settings:
     second_pass: bool = True        # druga próba, gdy nie wszystko rozpoznano
     recursive: bool = False         # szukaj plików także w podfolderach
     auto_apply: bool = False        # porządkuj od razu po analizie, bez podglądu
+    person_only: bool = False       # sortowanie tylko po imieniu i nazwisku (odcinek z pola)
     save_report: bool = False       # zapisuj raport CSV w folderze po uporządkowaniu
     quote_style: str = "pl"         # „…” albo "…" (tylko macOS/Linux)
     last_folder: str = ""

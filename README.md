@@ -42,10 +42,16 @@ Potrzebny jest **Python 3.10–3.14**:
 2. Sprawdź listę **Osoby** po prawej stronie okna:
    - **„Dodaj”** dopisuje nową osobę,
    - **dwuklik** (albo **„Edytuj”**) otwiera okno osoby: imię i nazwisko oraz **alternatywy**,
-     czyli zdrobnienia i przezwiska, np. *Weronika Chrabąszcz → Wera, Nika, Werka*,
+     czyli zdrobnienia i przezwiska, np. *Weronika Chrabąszcz → Wera, Nika, Werka*. Wpisz
+     alternatywę, naciśnij **Enter**, wpisz kolejną, **Enter**… a na koniec kliknij **„Zapisz”**,
    - **„Usuń”** usuwa zaznaczone osoby.
 3. **Przeciągnij folder** z nagraniami do okna programu (albo kliknij ramkę i wybierz folder).
    Analiza ruszy sama.
+
+   Jeśli wszystkie nagrania w folderze są z jednego odcinka, zaznacz **„sortowanie tylko po imieniu
+   i nazwisku”**: program rozpozna tylko osobę, a odcinek weźmie od razu z pola „Nazwa odcinka”
+   (nie musi paść w nagraniu). Osobę rozpoznaje tak samo jak zwykle: po imieniu i nazwisku, po samym
+   imieniu albo samym nazwisku, także z przekręconymi literami.
 4. Sprawdź tabelę. Kolory oznaczają:
    - 🟩 **zielony**: rozpoznano osobę i odcinek, więc plik trafi do folderu odcinka i osoby;
    - 🟨 **żółty**: rozpoznano tylko osobę albo tylko odcinek, więc plik dostanie tylko nową nazwę;

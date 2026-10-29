@@ -7,7 +7,7 @@ import os
 import sys
 
 from . import config
-from .analyzer import Analyzer
+from .analyzer import Analyzer, assign_episode
 from .asr import MODELS, Engine
 from .naming import apply_moves, find_audio_files, make_target, merge_prior, parse_episodes, parse_prior_label, plan_moves
 
@@ -20,6 +20,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--urzadzenie", choices=["auto", "cpu", "cuda"], help="CPU / karta graficzna")
     parser.add_argument("--sekundy", type=int, help="ile sekund od początku nagrania analizować")
     parser.add_argument("--podfoldery", action="store_true", help="szukaj nagrań także w podfolderach")
+    parser.add_argument("--tylko-osoby", action="store_true",
+                        help="sortowanie tylko po imieniu i nazwisku (odcinek bierze z --odcinek)")
     parser.add_argument("--zastosuj", action="store_true", help="od razu przenieś i zmień nazwy plików")
     args = parser.parse_args(argv)
 
@@ -45,8 +47,9 @@ def main(argv: list[str]) -> int:
     engine.load(on_status=print, on_download=progress)
     print("Model:", engine.description)
     people = settings.person_objects()
+    person_only = args.tylko_osoby or settings.person_only
     analyzer = Analyzer(engine, people, episodes, args.sekundy or settings.seconds,
-                        settings.use_hints, settings.second_pass)
+                        settings.use_hints, settings.second_pass, need_episode=not person_only)
     items = []
     for i, path in enumerate(files, 1):
         result = analyzer.analyze(path)
@@ -55,8 +58,9 @@ def main(argv: list[str]) -> int:
             print(f"[{i}/{len(files)}] {name}: BŁĄD – {result.error} (plik zostaje bez zmian)")
             continue
         prior = parse_prior_label(path, [p.name for p in people], episodes)
+        recognized, _ = assign_episode(result.episode.name or None, episodes, person_only)
         person, episode, _ = merge_prior(result.person.person.name if result.person.person else None,
-                                         result.episode.name or None, prior)
+                                         recognized, prior)
         target = make_target(person, episode, settings.quote_style)
         items.append((path, target))
         print(f"[{i}/{len(files)}] {name}: {target.label}   ({result.elapsed:.1f} s) „{result.transcript[:90]}”")

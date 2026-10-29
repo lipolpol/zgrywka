@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config
-from .analyzer import FileAnalysis, Recognizer
+from .analyzer import FileAnalysis, Recognizer, assign_episode
 from .asr import GPU_PACKAGES, MODELS, Engine, cuda_device_count, local_model_path, nvidia_libs_installed
 from .matching import EpisodeMatch, PersonMatch
 from .naming import (
@@ -50,7 +50,8 @@ zamienia mowę na tekst i szuka w nim osób z listy oraz nazwy odcinka. Porównu
 <li>samo imię albo samo nazwisko też wystarczy, jeśli nikt inny z listy go nie ma.</li>
 </ul>
 <p>Zdrobnienia i przezwiska (np. Wera, Nika, Werka) dopisz osobie jako <b>alternatywy</b>:
-dwuklik na osobie w panelu „Osoby” po prawej.</p>
+dwuklik na osobie w panelu „Osoby” po prawej, wpisz alternatywę i naciśnij Enter, potem kolejną…
+a na koniec „Zapisz”.</p>
 <p>W polu „Nazwa odcinka” możesz wpisać <b>kilka odcinków oddzielonych spacją</b>
 (np. <i>dom tratwy las</i>, nazwę z kilku słów wpisz w cudzysłowie). Program rozpozna,
 który odcinek pada w nagraniu. Nazwa z kilku słów pasuje też w innej kolejności i formie
@@ -63,6 +64,9 @@ gdy padną dwa tytuły albo dwie osoby, liczy się to, co padło wcześniej.</p>
 <tr><td><b>sam odcinek</b></td><td>tylko zmiana nazwy: <i>{NO_PERSON_PREFIX} „dom” 1</i></td></tr>
 <tr><td><b>nic</b></td><td>tylko zmiana nazwy: <i>{UNKNOWN_LABEL} 1</i></td></tr>
 </table>
+<p>Pole <b>„sortowanie tylko po imieniu i nazwisku”</b>: program rozpoznaje tylko osobę (samo imię,
+samo nazwisko i przekręcone litery też), a odcinek bierze od razu z pola „Nazwa odcinka” – nie musi
+on paść w nagraniu.</p>
 <p>W tabeli kliknij komórkę <b>Osoba</b> albo <b>Odcinek</b>, aby wybrać z listy albo wpisać własną nazwę.
 Ikona ▶ (albo dwuklik, albo spacja) odtwarza nagranie w odtwarzaczu na dole okna:
 przewijanie suwakiem, ±10 s, poprzednie/następne nagranie.</p>
@@ -453,6 +457,13 @@ class MainWindow(QMainWindow):
         self.episodes_label = QLabel()
         self.episodes_label.setTextFormat(Qt.TextFormat.RichText)
         chips_row.addWidget(self.episodes_label, 1)
+        self.person_only_check = QCheckBox("sortowanie tylko po imieniu i nazwisku")
+        self.person_only_check.setToolTip(
+            "Program rozpoznaje tylko osobę, a odcinek bierze od razu z pola „Nazwa odcinka” "
+            "(nie musi paść w nagraniu). Przy kilku wpisanych odcinkach: ten, który padł, a jeśli żaden – pierwszy.")
+        self.person_only_check.setChecked(self.settings.person_only)
+        self.person_only_check.toggled.connect(self.on_person_only_toggled)
+        chips_row.addWidget(self.person_only_check)
         self.split_check = QCheckBox("przycinka mikroportów")
         self.split_check.setToolTip("Rozpoznawanie ciągu dalszego nagrań, które mikroport przeciął "
                                     "(np. co 30 minut) – funkcja w przygotowaniu.")
@@ -553,8 +564,18 @@ class MainWindow(QMainWindow):
             return
         chips = " ".join(f"<span style='background-color:#2563eb; color:#ffffff;'>&nbsp;{html.escape(e)}&nbsp;</span>"
                          for e in episodes)
-        word = "Odcinki" if len(episodes) > 1 else "Odcinek"
-        self.episodes_label.setText(f"{word} do rozpoznania: {chips}")
+        if self.settings.person_only:
+            text = (f"Odcinek przypisywany do nagrań: {chips}" if len(episodes) == 1 else
+                    f"Odcinki (jeśli żaden nie padnie w nagraniu – pierwszy): {chips}")
+        else:
+            text = f"{'Odcinki' if len(episodes) > 1 else 'Odcinek'} do rozpoznania: {chips}"
+        self.episodes_label.setText(text)
+
+    def on_person_only_toggled(self, checked: bool) -> None:
+        self.settings.person_only = checked
+        self._update_episode_chips()
+        self._save_timer.start()
+        self.rematch()  # bez ponownego słuchania - zmienia się tylko przypisanie odcinka
 
     def on_split_toggled(self, checked: bool) -> None:
         if not checked:
@@ -679,10 +700,12 @@ class MainWindow(QMainWindow):
             row = self.results.rows[r]
             row.state, row.analysis, row.match, row.manual, row.new_path, row.target = PENDING, None, None, False, "", None
             row.person, row.episode, row.episode_heard, row.episode_loose, row.from_prior = None, None, "", False, False
+            row.episode_assumed = False
         self.results.refresh()
         self.cancel_requested = False
         self.worker = AnalysisWorker(self._get_engine(), jobs, people, list(episodes), self.settings.seconds,
-                                     self.settings.use_hints, self.settings.second_pass, self)
+                                     self.settings.use_hints, self.settings.second_pass,
+                                     need_episode=not self.settings.person_only, parent=self)
         self.worker.status.connect(self.on_status)
         self.worker.download_progress.connect(self.on_download_progress)
         self.worker.engine_ready.connect(self.on_engine_ready)
@@ -738,10 +761,11 @@ class MainWindow(QMainWindow):
     def _set_decision(self, r: int, match: PersonMatch, episode: EpisodeMatch) -> None:
         """Wynik rozpoznania uzupełniony o to, co już było w nazwie pliku nadanej wcześniej przez program."""
         prior = parse_prior_label(self.results.rows[r].original, self.results.people_names, self.results.episodes)
-        person, episode_name, used = merge_prior(match.person.name if match.person else None,
-                                                 episode.name if episode.found else None, prior)
+        recognized = episode.name if episode.found else None
+        assigned, assumed = assign_episode(recognized, self.results.episodes, self.settings.person_only)
+        person, episode_name, used = merge_prior(match.person.name if match.person else None, assigned, prior)
         self.results.apply_decision(r, match, person, episode_name, episode.heard if episode.found else "",
-                                    episode.found and episode.loose, used)
+                                    episode.found and episode.loose, assumed, used)
 
     def on_progress(self, done: int, total: int, remaining: float) -> None:
         self.progress.setValue(done)

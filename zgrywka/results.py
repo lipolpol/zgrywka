@@ -43,6 +43,7 @@ class ResultRow:
     match: PersonMatch | None = None
     episode_heard: str = ""
     episode_loose: bool = False
+    episode_assumed: bool = False      # odcinek wzięty z pola (sortowanie tylko po imieniu i nazwisku)
     from_prior: bool = False           # część informacji z nazwy nadanej wcześniej przez program
     target: Target | None = None
     new_path: str = ""
@@ -189,6 +190,8 @@ class ResultsModel(QAbstractTableModel):
             text = ""
         if row.episode_loose and "sprawdź" not in text:
             text = (text + " • " if text else "") + "odcinek z części liter – sprawdź"
+        if row.episode_assumed:
+            text = (text or "nie rozpoznano osoby") + " • odcinek z pola"
         if row.from_prior:
             return f"{text} • reszta z wcześniejszej nazwy" if text else "z wcześniejszej nazwy pliku"
         return text or "nie rozpoznano osoby"
@@ -207,6 +210,8 @@ class ResultsModel(QAbstractTableModel):
             return "Kliknij, aby wybrać osobę z listy albo wpisać własną"
         if col == COL_EPISODE:
             parts = []
+            if row.episode_assumed:
+                parts.append("Odcinek wzięty z pola „Nazwa odcinka” (sortowanie tylko po imieniu i nazwisku)")
             if row.episode_heard:
                 parts.append(f"Usłyszano: „{row.episode_heard}”")
             if row.state == DONE:
@@ -251,10 +256,11 @@ class ResultsModel(QAbstractTableModel):
                 self.dataChanged.emit(self.index(i, COL_PLAY), self.index(i, COL_PLAY))
 
     def apply_decision(self, r: int, match: PersonMatch, person: str | None, episode: str | None,
-                       episode_heard: str, episode_loose: bool, from_prior: bool) -> None:
+                       episode_heard: str, episode_loose: bool, episode_assumed: bool, from_prior: bool) -> None:
         row = self.rows[r]
         row.match, row.person, row.episode = match, person, episode
-        row.episode_heard, row.episode_loose, row.from_prior = episode_heard, episode_loose, from_prior
+        row.episode_heard, row.episode_loose, row.episode_assumed = episode_heard, episode_loose, episode_assumed
+        row.from_prior = from_prior
         self.row_changed(r)
 
     def refresh(self) -> None:

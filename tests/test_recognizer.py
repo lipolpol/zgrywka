@@ -185,3 +185,36 @@ def test_multiword_episode_in_any_order_and_form(text):
 ])
 def test_multiword_episode_needs_all_words_close(text):
     assert not Recognizer(PEOPLE, ["dom strachu"]).match(text)[1].found, text
+
+
+def test_person_only_mode_takes_episode_from_field():
+    from zgrywka.analyzer import assign_episode
+
+    assert assign_episode(None, ["dom"], person_only=True) == ("dom", True)
+    assert assign_episode("las", ["dom", "las"], person_only=True) == ("las", False)   # padł inny z listy
+    assert assign_episode(None, ["dom", "las"], person_only=True) == ("dom", True)    # żaden - pierwszy
+    assert assign_episode(None, ["dom"], person_only=False) == (None, False)
+    assert assign_episode(None, [], person_only=True) == (None, False)
+
+
+class FakeEngine:
+    def __init__(self, *texts):
+        self.texts, self.calls = list(texts), 0
+
+    def transcribe(self, audio, hotwords=None, vad_threshold=0.5):
+        self.calls += 1
+        return self.texts.pop(0) if self.texts else ""
+
+
+def test_person_only_mode_skips_second_pass_when_person_found():
+    import numpy as np
+
+    from zgrywka.analyzer import Analyzer, FileAnalysis
+
+    audio = np.zeros(16000, dtype=np.float32)
+    engine = FakeEngine("Marcel Gawroński, sprawdzamy dźwięk.", "druga próba")
+    Analyzer(engine, PEOPLE, ["dom"], need_episode=False)._recognize(audio, FileAnalysis("x.wav"))
+    assert engine.calls == 1                       # osoba jest, odcinek niepotrzebny
+    engine = FakeEngine("Marcel Gawroński, sprawdzamy dźwięk.", "druga próba")
+    Analyzer(engine, PEOPLE, ["dom"], need_episode=True)._recognize(audio, FileAnalysis("x.wav"))
+    assert engine.calls == 2                       # zwykły tryb szuka jeszcze odcinka

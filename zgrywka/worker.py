@@ -24,7 +24,7 @@ class AnalysisWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, engine: Engine, jobs: list[tuple[int, str]], people: list[Person], episodes: list[str],
-                 seconds: int, use_hints: bool, second_pass: bool, parent=None):
+                 seconds: int, use_hints: bool, second_pass: bool, need_episode: bool = True, parent=None):
         super().__init__(parent)
         self.engine = engine
         self.jobs = jobs
@@ -33,6 +33,7 @@ class AnalysisWorker(QThread):
         self.seconds = seconds
         self.use_hints = use_hints
         self.second_pass = second_pass
+        self.need_episode = need_episode
         self.cancelled = False
 
     def cancel(self) -> None:
@@ -51,7 +52,7 @@ class AnalysisWorker(QThread):
         self.engine_ready.emit(self.engine.description)
 
         analyzer = Analyzer(self.engine, self.people, self.episodes, self.seconds,
-                            self.use_hints, self.second_pass)
+                            self.use_hints, self.second_pass, self.need_episode)
         started = time.monotonic()
         total = len(self.jobs)
         for done, (row, path) in enumerate(self.jobs):

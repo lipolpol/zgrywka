@@ -88,14 +88,23 @@ class Recognizer:
         return person, episode
 
 
+def assign_episode(recognized: str | None, episodes: list[str], person_only: bool) -> tuple[str | None, bool]:
+    """Tryb "sortowanie tylko po imieniu i nazwisku": odcinek nie musi paść w nagraniu - bierzemy go
+    z pola (rozpoznany, jeśli wpisano kilka i któryś padł, inaczej pierwszy). Zwraca (odcinek, z_pola)."""
+    if recognized or not person_only or not episodes:
+        return recognized, False
+    return episodes[0], True
+
+
 class Analyzer:
     def __init__(self, engine, people: list[Person], episodes: list[str], seconds: float = 30,
-                 use_hints: bool = True, second_pass: bool = True):
+                 use_hints: bool = True, second_pass: bool = True, need_episode: bool = True):
         self.engine = engine
         self.recognizer = Recognizer(people, episodes)
         self.seconds = seconds
         self.hints = build_hints(people, episodes) if use_hints else None
         self.second_pass = second_pass
+        self.need_episode = need_episode  # False w trybie "tylko po imieniu i nazwisku"
 
     def analyze(self, path: str) -> FileAnalysis:
         started = time.monotonic()
@@ -116,7 +125,8 @@ class Analyzer:
         result.transcripts.append(text)
         result.hinted = self.hints is not None
         person, episode = self.recognizer.first_pass(text, result.hinted)
-        if self.second_pass and not (person.person and episode.found):
+        complete = person.person and (episode.found or not self.need_episode)
+        if self.second_pass and not complete:
             # Druga próba: bez podpowiedzi i z czulszym wykrywaniem mowy.
             text2 = self.engine.transcribe(audio, hotwords=None, vad_threshold=0.35)
             if text2 and text2 != text:
