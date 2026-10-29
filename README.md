@@ -1,0 +1,157 @@
+# Zgrywka MXB
+
+Program do porządkowania nagrań z mikroportów. Słucha początku każdego pliku audio,
+rozpoznaje mowę po polsku, odnajduje **imię i nazwisko** osoby oraz **nazwę odcinka**,
+a potem tworzy foldery, przenosi pliki i nadaje im numerowane nazwy.
+
+Działa na **Windows, macOS i Linuksie**. Rozpoznawanie mowy odbywa się w całości na Twoim
+komputerze: nagrania nigdzie nie są wysyłane. Internet jest potrzebny tylko raz, do pobrania
+bibliotek i modelu mowy.
+
+---
+
+## Jak uruchomić
+
+| System  | Co kliknąć dwukrotnie |
+|---------|-----------------------|
+| Windows | `Zgrywka-Windows.bat` |
+| macOS   | `Zgrywka-Mac.command` (za pierwszym razem: prawy przycisk → **Otwórz**) |
+| Linux   | `Zgrywka-Linux.sh` (albo „Zgrywka MXB” w menu aplikacji po pierwszym uruchomieniu) |
+
+**Pierwsze uruchomienie** trwa kilka minut, bo program sam instaluje potrzebne biblioteki
+(ok. 700 MB, w folderze `.venv` obok programu). Przy pierwszej analizie pobiera jeszcze
+model rozpoznawania mowy (ok. 1,6 GB, do folderu `modele`). Później wszystko startuje od razu
+i działa bez internetu.
+
+Potrzebny jest **Python 3.10–3.14**:
+- **Windows**: pobierz z <https://www.python.org/downloads/windows/> i przy instalacji zaznacz
+  **„Add python.exe to PATH”**.
+- **macOS**: pobierz z <https://www.python.org/downloads/macos/>.
+- **Linux**: zwykle już jest; w razie potrzeby `sudo apt install python3 python3-venv`.
+
+---
+
+## Jak używać
+
+1. Wpisz **nazwę odcinka**, np. `tratwy`.
+2. Sprawdź listę **Osoby** po prawej stronie okna. Przyciskiem **„Dodaj osobę”** dopiszesz
+   nową osobę, dwuklikiem poprawisz nazwę, a przyciskiem **„Usuń”** usuniesz zaznaczone.
+3. **Przeciągnij folder** z nagraniami do okna programu (albo kliknij ramkę i wybierz folder).
+   Analiza ruszy sama.
+4. Sprawdź tabelę. Kolory oznaczają:
+   - 🟩 **zielony**: rozpoznano osobę i odcinek, więc plik trafi do folderu osoby;
+   - 🟨 **żółty**: rozpoznano tylko osobę albo tylko odcinek, więc plik dostanie tylko nową nazwę;
+   - 🟥 **czerwony**: nic nie rozpoznano;
+   - ⬜ **szary**: pliku nie da się odczytać (zostanie bez zmian).
+
+   Kolumna **„Co usłyszano”** pokazuje, co program zrozumiał z nagrania. Jeśli coś się nie zgadza,
+   kliknij komórkę w kolumnie **„Osoba”** i wybierz właściwą osobę (albo **„＋ Dodaj nową osobę…”**,
+   jeśli jej jeszcze nie ma na liście), a odcinek zaznacz lub odznacz. Prawy przycisk myszy zmienia
+   kilka zaznaczonych wierszy naraz. Dwuklik odtwarza nagranie.
+5. Kliknij **„Uporządkuj pliki”**.
+6. Jeśli coś poszło nie tak, kliknij **„Cofnij ostatnie”**: wszystkie pliki wrócą na swoje miejsca.
+
+### Zasady nazw
+
+| Co rozpoznano          | Co się dzieje z plikiem |
+|------------------------|-------------------------|
+| osoba **i** odcinek    | przeniesienie do folderu `Marcel Gawroński „tratwy”` jako `Marcel Gawroński „tratwy” 1.wav`, `… 2.wav`, … |
+| tylko osoba            | zmiana nazwy w miejscu: `Marcel Gawroński „!!BRAK NAZWY FILMU!!” 1.wav` |
+| tylko odcinek          | zmiana nazwy w miejscu: `NIE WIEM KTO „tratwy” 1.wav` |
+| nic                    | zmiana nazwy w miejscu: `nie zidentyfikowany 1.wav` |
+
+- Numeracja idzie według kolejności oryginalnych nazw plików i **kontynuuje istniejące numery**.
+  Gdy po kolejnej zgrywce wrzucisz nowe pliki do tego samego folderu, dostaną dalsze numery.
+- Program **nigdy nie nadpisuje** istniejących plików.
+- Ponowna analiza tego samego folderu niczego nie psuje: program pamięta, co już jest w nazwach
+  plików (także Twoje ręczne poprawki), i może tylko dopisać nowe informacje.
+- **Cudzysłowy**: Windows oraz dyski exFAT/FAT32 (karty pamięci, dyski przenośne) nie pozwalają
+  na znak `"` w nazwach plików, dlatego program używa polskich cudzysłowów `„tratwy”`. Na macOS
+  i Linuksie można to zmienić w Ustawieniach.
+
+### Jak program rozpoznaje osoby
+
+Program porównuje **litery**, więc nie trzeba wpisywać żadnych „innych form” ani typowych
+pomyłek. Wystarczy imię i nazwisko na liście.
+
+- **Przekręcone litery i polska wymowa**: „Radek **H**aberko” = Radek Chaberko,
+  „Weronika Hrabążcz” = Weronika Chrabąszcz (ch = h, rz = ż, ó = u, w ≈ f, d ≈ t…).
+- **Odmiana i zdrobnienia**: „mikroport **Marcela Gawrońskiego**”, „**Radka**”, „**Michałek**”,
+  „tratwa” = „tratwy”.
+- **Imię i nazwisko obok siebie**: wystarczy, że zgadza się mniej więcej **co druga litera**
+  każdego z nich, np. „Marcel **Woński**” = Marcel Gawroński.
+- **Samo imię albo samo nazwisko** wystarczy, jeśli nikt inny z listy go nie ma. Gdy pasuje
+  tylko część liter (np. zgubiona litera: „**adek**” = Radek), program przyjmuje to tylko wtedy,
+  gdy słowo pada **tuż przy nazwie odcinka** („adek, tratwy”), bo tak wygląda przedstawianie się
+  na nagraniu. Takie wiersze są oznaczone dopiskiem *„część liter – sprawdź”*.
+- **Nazwa odcinka** może mieć jedną pomyłkę w literach („dratwy”, „tatwy”), a tuż przy imieniu
+  i nazwisku także więcej („Weronika Hrabążcz, **tracy**”).
+- Żeby nie było przypadkowych trafień, program **nie bierze zwykłych słów ani popularnych imion
+  i nazwisk za kogoś z listy**: „miał” to nie Michał, „radio” to nie Radek, „Kowalska” to nie
+  Kozłowska. Samo „Chaberko” pasuje i do Radka, i do Michała, więc wtedy też nie zgaduje.
+
+**Najlepiej działa**, gdy na początku nagrania pada wyraźnie: *„Marcel Gawroński, tratwy”*.
+
+---
+
+## Ustawienia
+
+- **Osoby** (panel po prawej w głównym oknie): dokładnie tak, jak tu wpiszesz imię i nazwisko,
+  tak będą nazwane foldery i pliki.
+- **Zakładka „Ustawienia”**:
+  - **Model**: „Dokładny (large-v3-turbo)” jest zalecany. „Szybki (small)” działa ok. 2–3 razy
+    szybciej na słabszych komputerach, kosztem dokładności.
+  - **Ile sekund analizować**: domyślnie 30 s od początku nagrania.
+  - **Karta graficzna NVIDIA**: jeśli ją masz (Windows/Linux), przycisk **„Zainstaluj
+    przyspieszenie GPU”** doinstaluje biblioteki CUDA (ok. 2,5 GB), co przyspiesza analizę
+    nawet 10 razy. Bez tego program działa na procesorze.
+  - **Porządkuj od razu po analizie**: tryb w pełni automatyczny, bez podglądu.
+  - **Raport CSV**: zapis tabeli „stara nazwa → nowa nazwa” w folderze nagrań.
+
+---
+
+## Tryb tekstowy (dla zaawansowanych)
+
+```
+.venv/bin/python -m zgrywka /ścieżka/do/folderu --odcinek tratwy            # tylko podgląd
+.venv/bin/python -m zgrywka /ścieżka/do/folderu --odcinek tratwy --zastosuj # podgląd i porządkowanie
+```
+Na Windows zamiast `.venv/bin/python` użyj `.venv\Scripts\python.exe`. Opcje: `--model small`,
+`--urzadzenie cpu`, `--sekundy 45`, `--podfoldery`.
+
+---
+
+## Gdy coś nie działa
+
+- **Okno się nie otwiera (Linux)**: zainstaluj `sudo apt install libxcb-cursor0`.
+- **Błąd bibliotek po aktualizacji systemu lub Pythona**: usuń folder `.venv` obok programu
+  i uruchom plik startowy ponownie.
+- **macOS: „nie można otworzyć, bo pochodzi od niezidentyfikowanego dewelopera”**: prawy przycisk
+  na `Zgrywka-Mac.command` → **Otwórz**. Jeśli plik nie chce się uruchomić, wpisz w Terminalu
+  `chmod +x Zgrywka-Mac.command`.
+- **Dziennik błędów** (warto go dołączyć przy zgłaszaniu problemu):
+  - Windows: `%LOCALAPPDATA%\ZgrywkaMXB\zgrywka.log`
+  - macOS: `~/Library/Application Support/ZgrywkaMXB/zgrywka.log`
+  - Linux: `~/.local/share/ZgrywkaMXB/zgrywka.log`
+
+Ustawienia, lista osób i historia zmian (do cofania) są w tym samym folderze co dziennik.
+Żeby całkowicie usunąć program, usuń jego folder (razem z `.venv` i `modele`) oraz folder `ZgrywkaMXB`
+z powyższej lokalizacji.
+
+---
+
+## Dla programistów
+
+```
+zgrywka/
+  matching.py   rozmyte dopasowanie osób i nazwy odcinka (polska wymowa, odmiana, literówki)
+  analyzer.py   transkrypcja początku nagrania (z podpowiedzią i drugą próbą) + decyzja
+  asr.py        faster-whisper: pobieranie modelu, bezpieczny wybór CPU/GPU
+  audio.py      dekodowanie tylko początku pliku (PyAV), wyrównanie poziomu
+  naming.py     nazwy, numeracja, przenoszenie z dziennikiem i cofaniem
+  ui.py         okno (PySide6 / Qt)
+  worker.py     analiza w osobnym wątku
+  cli.py        tryb tekstowy
+tests/          testy (pytest)
+```
+Testy: `.venv/bin/python -m pip install pytest && .venv/bin/python -m pytest tests`

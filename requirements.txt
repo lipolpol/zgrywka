@@ -1,0 +1,8 @@
+# Biblioteki potrzebne do działania programu (instalują się automatycznie przy pierwszym uruchomieniu)
+faster-whisper>=1.1
+ctranslate2>=4.4
+huggingface_hub>=0.23
+av>=12
+numpy>=1.24
+rapidfuzz>=3.0
+PySide6-Essentials>=6.6

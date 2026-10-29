@@ -1,0 +1,136 @@
+"""Analiza jednego nagrania: transkrypcja początku i rozpoznanie osoby oraz nazwy odcinka."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+from .audio import AudioError, load_head
+from .matching import (
+    EpisodeMatch, EpisodeMatcher, Person, PersonMatch, PersonMatcher, mask_tokens, near_positions, tokenize,
+)
+
+
+def build_hints(people: list[Person], episode: str) -> str:
+    """Podpowiedź dla modelu: poprawna pisownia nazwisk i nazwy odcinka.
+
+    Celowo kończy się neutralnym zdaniem. Gdy podpowiedź kończyła się nazwiskiem albo nazwą
+    odcinka, a nagranie zaczynało się od tych samych słów, model potrafił je pominąć
+    (traktował je jak tekst już zapisany).
+    """
+    parts = []
+    if episode.strip():
+        parts.append(f"Odcinek: {episode.strip()}.")
+    names = ", ".join(p.name for p in people)
+    if names:
+        parts.append(f"Osoby: {names}.")
+    parts.append("Początek nagrania.")
+    return " ".join(parts)
+
+
+@dataclass
+class FileAnalysis:
+    path: str
+    duration: float | None = None
+    transcripts: list[str] = field(default_factory=list)
+    hinted: bool = False  # czy pierwsza transkrypcja powstała z podpowiedzią
+    person: PersonMatch = field(default_factory=PersonMatch)
+    episode: EpisodeMatch = field(default_factory=EpisodeMatch)
+    error: str = ""
+    elapsed: float = 0.0
+
+    @property
+    def transcript(self) -> str:
+        return " ‖ ".join(t for t in self.transcripts if t)
+
+
+class Recognizer:
+    """Decyzja "kto i jaki odcinek" na podstawie transkrypcji (bez ponownego słuchania nagrania)."""
+
+    def __init__(self, people: list[Person], episode: str):
+        self.persons = PersonMatcher(people)
+        self.episodes = EpisodeMatcher(episode)
+
+    def match(self, text: str) -> tuple[PersonMatch, EpisodeMatch]:
+        tokens = tokenize(text)
+        episode = self.episodes.match(tokens)
+        # Samo imię lub nazwisko z częścią liter przyjmujemy tylko tam, gdzie zwykle pada
+        # przy przedstawianiu się: tuż przy nazwie odcinka (ale nie w niej samej).
+        slots: set[int] = set()
+        person_tokens = tokens
+        if episode.found:
+            episode_words = range(episode.position, episode.position + episode.length)
+            slots |= near_positions(episode.position, len(tokens))
+            slots -= set(episode_words)
+            person_tokens = mask_tokens(tokens, episode_words)  # nazwa odcinka nie jest imieniem
+        person = self.persons.match(person_tokens, slots)
+        if not episode.found and person.person:
+            episode = self.episodes.match(tokens, near=person.position)
+        return person, episode
+
+    def first_pass(self, text: str, hinted: bool) -> tuple[PersonMatch, EpisodeMatch]:
+        person, episode = self.match(text)
+        if hinted and len(set(self.persons.full_mentions(text))) >= 2:
+            # kilka osób z listy naraz - prawdopodobnie model "powtórzył" podpowiedź; nie ufamy temu
+            return PersonMatch(), EpisodeMatch()
+        return person, episode
+
+    def decide(self, transcripts: list[str], hinted: bool) -> tuple[PersonMatch, EpisodeMatch]:
+        if not transcripts:
+            return PersonMatch(), EpisodeMatch()
+        person, episode = self.first_pass(transcripts[0], hinted)
+        for text in transcripts[1:]:
+            person2, episode2 = self.match(text)
+            person = _better_person(person, person2)
+            if episode2.found and (not episode.found or episode2.score > episode.score):
+                episode = episode2
+        return person, episode
+
+
+class Analyzer:
+    def __init__(self, engine, people: list[Person], episode: str, seconds: float = 30,
+                 use_hints: bool = True, second_pass: bool = True):
+        self.engine = engine
+        self.recognizer = Recognizer(people, episode)
+        self.seconds = seconds
+        self.hints = build_hints(people, episode) if use_hints else None
+        self.second_pass = second_pass
+
+    def analyze(self, path: str) -> FileAnalysis:
+        started = time.monotonic()
+        result = FileAnalysis(path)
+        try:
+            audio, result.duration = load_head(path, self.seconds)
+        except AudioError as exc:
+            result.error = str(exc)
+        except OSError as exc:
+            result.error = f"błąd odczytu pliku: {exc.strerror or exc}"
+        else:
+            self._recognize(audio, result)
+        result.elapsed = time.monotonic() - started
+        return result
+
+    def _recognize(self, audio, result: FileAnalysis) -> None:
+        text = self.engine.transcribe(audio, hotwords=self.hints)
+        result.transcripts.append(text)
+        result.hinted = self.hints is not None
+        person, episode = self.recognizer.first_pass(text, result.hinted)
+        if self.second_pass and not (person.person and episode.found):
+            # Druga próba: bez podpowiedzi i z czulszym wykrywaniem mowy.
+            text2 = self.engine.transcribe(audio, hotwords=None, vad_threshold=0.35)
+            if text2 and text2 != text:
+                result.transcripts.append(text2)
+        result.person, result.episode = self.recognizer.decide(result.transcripts, result.hinted)
+
+
+def _better_person(a: PersonMatch, b: PersonMatch) -> PersonMatch:
+    if not a.person:
+        if not b.person and not b.ambiguous:
+            return a if a.ambiguous else b
+        return b
+    if not b.person:
+        return a
+    best = a if a.rank >= b.rank else b
+    if a.person != b.person:
+        best.conflict = True
+    return best
