@@ -16,6 +16,8 @@ a zwykłe słowa i popularne imiona/nazwiska nigdy nie udają kogoś z listy
 
 from __future__ import annotations
 
+import math
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -404,7 +406,8 @@ class _Candidate:
 
     @property
     def rank(self) -> tuple:
-        return (_strength(self.kind, self.loose), self.score, -self.position)
+        # przy tej samej sile dowodu wygrywa to, co padło wcześniej - początek nagrania ma pierwszeństwo
+        return (_strength(self.kind, self.loose), -self.position, self.score)
 
 
 class PersonMatcher:
@@ -657,19 +660,56 @@ class EpisodeMatcher:
         if loose:
             score, i, n = loose
             return EpisodeMatch(True, score, _heard(tokens, i, n), i, n, loose=True)
-        # Dłuższe nazwy: wystarczy, że padły wszystkie istotne słowa (w dowolnej kolejności).
-        significant = [w for w in self.words if len(w) >= 4]
-        if len(significant) >= 2:
-            heard, first = [], None
-            for word in significant:
-                part = EpisodeMatcher(word)
-                hit = part._search(tokens, part.allowed)
-                if hit is None:
-                    return EpisodeMatch()
-                heard.append(_heard(tokens, hit[1], hit[2]))
-                first = hit[1] if first is None else min(first, hit[1])
-            return EpisodeMatch(True, 0.8, " … ".join(heard), first, 1)
+        cluster = self._search_words(tokens)
+        if cluster:
+            start, length, exact = cluster
+            return EpisodeMatch(True, 0.9 if exact else 0.7, _heard(tokens, start, length), start, length,
+                                loose=not exact)
         return EpisodeMatch()
+
+    def _search_words(self, tokens: list[Token]):
+        """Nazwa z kilku słów: każde słowo padło blisko pozostałych, w dowolnej kolejności i formie
+        ("dom strachu" = "w najstraszniejszym domu strachu" = "straszny dom"). Najwcześniejsze trafienie."""
+        if len(self.words) < 2:
+            return None
+        hits = []  # dla każdego słowa nazwy: [(pozycja, czy_dokładnie)]
+        for word in self.words:
+            found = [(i, quality) for i, t in enumerate(tokens) if t.norm
+                     for quality in (_episode_word_match(word, t.norm),) if quality]
+            if not found:
+                return None
+            hits.append(found)
+        span = len(self.words) + 1  # słowa nazwy muszą paść tuż obok siebie (najwyżej jedno słowo między nimi)
+        for start in sorted({i for found in hits for i, _ in found}):
+            chosen: list[tuple[int, str]] = []
+            for found in hits:
+                taken = {i for i, _ in chosen}
+                near = [(i, q) for i, q in found if start <= i < start + span and i not in taken]
+                if not near:
+                    break
+                chosen.append(near[0])
+            else:
+                positions = [i for i, _ in chosen]
+                lo, hi = min(positions), max(positions)
+                return lo, hi - lo + 1, all(q == "exact" for _, q in chosen)
+        return None
+
+
+def _episode_word_match(word: str, token: str) -> str:
+    """Czy słowo z transkrypcji to (forma) słowa z nazwy odcinka: "exact" (także odmiana),
+    "letters" (pomyłki albo ten sam początek: "strachu" ~ "straszny") albo "" (nie)."""
+    if token == word:
+        return "exact"
+    if len(word) <= 3:  # krótkie słowa ("dom") tylko dokładnie albo z polską końcówką ("domu")
+        return "exact" if token.startswith(word) and token[len(word):] in _INFLECTION_SUFFIXES else ""
+    word_stem, token_stem = _episode_stem(word), _episode_stem(token)
+    if word_stem == token_stem:
+        return "exact"
+    if min(Levenshtein.distance(word, token), Levenshtein.distance(word_stem, token_stem)) <= \
+            max_edits_episode(len(word)):
+        return "letters"
+    common = len(os.path.commonprefix([phonetic(word), phonetic(token)]))
+    return "letters" if common >= max(4, math.ceil(0.6 * len(word_stem))) else ""
 
 
 class MultiEpisodeMatcher:
@@ -689,15 +729,15 @@ class MultiEpisodeMatcher:
         return found
 
     @staticmethod
-    def choose(found: list[EpisodeMatch], near: int | None = None) -> EpisodeMatch:
-        """Najpewniejszy odcinek: dokładny przed luźnym, najbliżej imienia, najlepszy wynik, najwcześniej."""
+    def choose(found: list[EpisodeMatch]) -> EpisodeMatch:
+        """Początek nagrania ma pierwszeństwo: wygrywa odcinek, który padł najwcześniej
+        (np. "dom" w 5. sekundzie przed innym tytułem w 10.), potem dokładny przed luźnym."""
         if not found:
             return EpisodeMatch()
 
         def key(r: EpisodeMatch):
-            distance = abs(r.position - near) if near is not None and r.position is not None else 0
-            return (not r.loose, -distance, round(r.score, 3), -(r.position or 0))
+            return (r.position if r.position is not None else 1 << 30, r.loose, -r.score)
 
-        best = max(found, key=key)
+        best = min(found, key=key)
         best.conflict = len({r.name.casefold() for r in found}) > 1
         return best

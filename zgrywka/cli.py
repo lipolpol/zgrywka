@@ -24,6 +24,13 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     settings = config.load_settings()
+    from . import lock
+
+    if lock.unlock_needed(settings):
+        if not lock.ask_password_cli():
+            print("Bez hasła program nie działa.")
+            return 3
+        lock.mark_unlocked(settings)
     episodes = parse_episodes(args.odcinek)
     folder = os.path.abspath(args.folder)
     files = find_audio_files(folder, args.podfoldery or settings.recursive)

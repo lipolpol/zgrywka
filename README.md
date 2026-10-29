@@ -18,6 +18,9 @@ bibliotek i modelu mowy.
 | macOS   | `Zgrywka-Mac.command` (za pierwszym razem: prawy przycisk → **Otwórz**) |
 | Linux   | `Zgrywka-Linux.sh` (albo „Zgrywka MXB” w menu aplikacji po pierwszym uruchomieniu) |
 
+Program jest chroniony **hasłem**: pyta o nie przy pierwszym uruchomieniu i potem raz na 7 dni
+(bez hasła nie działa). Hasło zna osoba, która przekazała Ci program.
+
 **Pierwsze uruchomienie** trwa kilka minut, bo program sam instaluje potrzebne biblioteki
 (ok. 700 MB, w folderze `.venv` obok programu). Przy pierwszej analizie pobiera jeszcze
 model rozpoznawania mowy (ok. 1,6 GB, do folderu `modele`). Później wszystko startuje od razu
@@ -99,6 +102,10 @@ z nazwiskiem („Wera Chrabąszcz”).
   na nagraniu. Takie wiersze są oznaczone dopiskiem *„część liter – sprawdź”*.
 - **Nazwa odcinka** może mieć jedną pomyłkę w literach („dratwy”, „tatwy”), a tuż przy imieniu
   i nazwisku także więcej („Weronika Hrabążcz, **tracy**”).
+- **Nazwa z kilku słów** pasuje też w innej kolejności i formie, jeśli słowa padną obok siebie:
+  odcinek *dom strachu* rozpozna w „w najstraszniejszym **domu strachu**” i w „**straszny dom**”.
+- **Początek nagrania ma pierwszeństwo**: jeśli padną dwa tytuły (np. „dom” w 5. sekundzie,
+  a inny w 10.), program bierze ten wcześniejszy. Tak samo przy dwóch osobach.
 - Żeby nie było przypadkowych trafień, program **nie bierze zwykłych słów ani popularnych imion
   i nazwisk za kogoś z listy**: „miał” to nie Michał, „radio” to nie Radek, „Kowalska” to nie
   Kozłowska. Samo „Chaberko” pasuje i do Radka, i do Michała, więc wtedy też nie zgaduje.
@@ -119,6 +126,9 @@ z nazwiskiem („Wera Chrabąszcz”).
     przyspieszenie GPU”** doinstaluje biblioteki CUDA (ok. 2,5 GB), co przyspiesza analizę
     nawet 10 razy. Bez tego program działa na procesorze.
   - **Porządkuj od razu po analizie**: tryb w pełni automatyczny, bez podglądu.
+- **Przycinka mikroportów** (pole w głównym oknie): funkcja w przygotowaniu. Docelowo rozpozna,
+  że plik, który mikroport zaczął sekundę po przecięciu nagrania (np. co 30 minut), jest ciągiem
+  dalszym poprzedniego, i podpisze go tak samo.
   - **Raport CSV**: zapis tabeli „stara nazwa → nowa nazwa” w folderze nagrań.
 
 ---
@@ -166,6 +176,7 @@ zgrywka/
   player.py     wbudowany odtwarzacz (PyAV + miniaudio) i jego pasek
   results.py    tabela wyników i edycja osoby/odcinka
   people.py     panel osób i okno osoby z alternatywami
+  lock.py       hasło raz na 7 dni (w kodzie tylko skrót PBKDF2)
   ui.py         okno główne (PySide6 / Qt)
   worker.py     analiza w osobnym wątku
   cli.py        tryb tekstowy

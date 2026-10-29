@@ -76,6 +76,13 @@ def main() -> int:
     app.setOrganizationName(config.APP_ID)
     app.setWindowIcon(app_icon())
     settings = config.load_settings()
+    from . import lock
+
+    if lock.unlock_needed(settings):
+        if not lock.ask_password_gui():
+            log.info("Nie podano hasła - zamykam")
+            return 0
+        lock.mark_unlocked(settings)
     window = MainWindow(settings)
     window.show()
     log.info("Start programu (Python %s, %s)", sys.version.split()[0], sys.platform)

@@ -153,3 +153,35 @@ def test_shared_alternative_is_ambiguous():
     people = [Person("Aleksandra Nowak", ("Ola",)), Person("Olga Lis", ("Ola",))]
     person, _ = Recognizer(people, ["dom"]).match("Ola, dom. " + FILLER)
     assert person.person is None
+
+
+def test_beginning_has_priority_for_episodes():
+    rec = Recognizer(PEOPLE, ["las", "dom"])
+    _, episode = rec.match("Weronika Chrabąszcz, dom. A w przyszłym tygodniu kręcimy las. " + FILLER)
+    assert episode.name == "dom" and episode.conflict
+
+
+def test_beginning_has_priority_for_people():
+    person, _ = Recognizer(PEOPLE, ["dom"]).match("Marcel Woński, dom. Potem Eliza Macudzińska. " + FILLER)
+    assert person.person.name == "Marcel Gawroński" and person.conflict
+
+
+@pytest.mark.parametrize("text", [
+    "Spędziliśmy 24h w najstraszniejszym domu strachu.",   # odmiana: "domu"
+    "Straszny dom, Marcel Gawroński.",                      # inna kolejność i forma: "stra…" + "dom"
+    "Dom strachu, ujęcie pierwsze.",
+    "Marcel Gawroński, strachu dom.",
+    "Dom pełen strachu, Eliza Macudzińska.",                # jedno słowo między
+])
+def test_multiword_episode_in_any_order_and_form(text):
+    _, episode = Recognizer(PEOPLE, ["dom strachu"]).match(text)
+    assert episode.found and episode.name == "dom strachu", text
+
+
+@pytest.mark.parametrize("text", [
+    "Wracam do domu, jutro też jestem.",                    # tylko jedno słowo z nazwy
+    "Mój dom jest daleko, a strach ma wielkie oczy.",       # słowa za daleko od siebie
+    "Strażacy przyjechali na miejsce.",
+])
+def test_multiword_episode_needs_all_words_close(text):
+    assert not Recognizer(PEOPLE, ["dom strachu"]).match(text)[1].found, text

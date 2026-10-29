@@ -53,7 +53,9 @@ zamienia mowę na tekst i szuka w nim osób z listy oraz nazwy odcinka. Porównu
 dwuklik na osobie w panelu „Osoby” po prawej.</p>
 <p>W polu „Nazwa odcinka” możesz wpisać <b>kilka odcinków oddzielonych spacją</b>
 (np. <i>dom tratwy las</i>, nazwę z kilku słów wpisz w cudzysłowie). Program rozpozna,
-który odcinek pada w nagraniu.</p>
+który odcinek pada w nagraniu. Nazwa z kilku słów pasuje też w innej kolejności i formie
+(<i>dom strachu</i> = „domu strachu” = „straszny dom”). <b>Początek nagrania ma pierwszeństwo</b>:
+gdy padną dwa tytuły albo dwie osoby, liczy się to, co padło wcześniej.</p>
 <table cellpadding="4">
 <tr><td><b>osoba + odcinek</b></td><td>plik trafia do folderu odcinka i osoby:
   <i>dom / Weronika Chrabąszcz „dom” / Weronika Chrabąszcz „dom” 1</i>, <i>… 2</i> itd.</td></tr>
@@ -447,9 +449,16 @@ class MainWindow(QMainWindow):
         top.addWidget(self.episode_edit, 1)
         top.addWidget(help_button)
         layout.addLayout(top)
+        chips_row = QHBoxLayout()
         self.episodes_label = QLabel()
         self.episodes_label.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(self.episodes_label)
+        chips_row.addWidget(self.episodes_label, 1)
+        self.split_check = QCheckBox("przycinka mikroportów")
+        self.split_check.setToolTip("Rozpoznawanie ciągu dalszego nagrań, które mikroport przeciął "
+                                    "(np. co 30 minut) – funkcja w przygotowaniu.")
+        self.split_check.toggled.connect(self.on_split_toggled)
+        chips_row.addWidget(self.split_check)
+        layout.addLayout(chips_row)
 
         self.drop_zone = DropZone()
         self.drop_zone.folder_dropped.connect(lambda p: self.open_folder(p, autostart=True))
@@ -546,6 +555,19 @@ class MainWindow(QMainWindow):
                          for e in episodes)
         word = "Odcinki" if len(episodes) > 1 else "Odcinek"
         self.episodes_label.setText(f"{word} do rozpoznania: {chips}")
+
+    def on_split_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        QMessageBox.information(
+            self, config.APP_NAME,
+            "Funkcja „przycinka mikroportów” nie jest jeszcze dopracowana.\n\n"
+            "Docelowo: gdy mikroport przetnie nagranie (np. po 30 minutach) i od razu zacznie nowy plik "
+            "(różnica 1–5 klatek), program po godzinie nagrania rozpozna, że nowy plik to ciąg dalszy "
+            "poprzedniego, i podpisze go tak samo, nawet jeśli na jego początku nic nie powiedziano.")
+        self.split_check.blockSignals(True)
+        self.split_check.setChecked(False)
+        self.split_check.blockSignals(False)
 
     # --- przeciąganie na całe okno ---
     def dragEnterEvent(self, event):

@@ -67,7 +67,7 @@ class Recognizer:
         near = person.position if person.person else None
         if not found and near is not None:
             found = self.episodes.find_all(tokens, near=near)
-        return person, self.episodes.choose(found, near)
+        return person, self.episodes.choose(found)
 
     def first_pass(self, text: str, hinted: bool) -> tuple[PersonMatch, EpisodeMatch]:
         person, episode = self.match(text)

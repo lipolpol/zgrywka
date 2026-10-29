@@ -84,6 +84,7 @@ class Settings:
     quote_style: str = "pl"         # „…” albo "…" (tylko macOS/Linux)
     last_folder: str = ""
     window_geometry: str = ""
+    unlocked_at: float = 0.0        # kiedy ostatnio podano hasło (prośba raz na 7 dni)
 
     def person_objects(self) -> list[Person]:
         return [Person(p["name"], tuple(p["alternatywy"])) for p in clean_people(self.people)]
