@@ -41,6 +41,21 @@ def clean_episode(text: str) -> str:
     return " ".join((text or "").strip().strip(_QUOTE_CHARS).split())
 
 
+_EPISODE_TOKEN = re.compile(r"[\"„“”«»]([^\"„“”«»]+)[\"„“”«»]|([^\s,;]+)")
+
+
+def parse_episodes(text: str) -> list[str]:
+    """Pole "Nazwa odcinka": kilka nazw oddzielonych spacją ("dom tratwy las").
+    Nazwę z kilku słów można wpisać w cudzysłowie: "tratwy na Wiśle" dom."""
+    result, seen = [], set()
+    for match in _EPISODE_TOKEN.finditer(text or ""):
+        name = clean_episode(match.group(1) or match.group(2) or "")
+        if name and name.casefold() not in seen:
+            seen.add(name.casefold())
+            result.append(name)
+    return result
+
+
 def safe_filename(name: str, allow_ascii_quote: bool = False) -> str:
     """Zamienia znaki niedozwolone w nazwach plików na Windows/macOS/Linux."""
     out = []
@@ -60,35 +75,40 @@ def safe_filename(name: str, allow_ascii_quote: bool = False) -> str:
 
 @dataclass(frozen=True)
 class Target:
-    label: str   # np. 'Marcel Gawroński „tratwy”'
-    move: bool   # True: plik trafia do podfolderu o tej nazwie; False: zmiana nazwy w miejscu
+    label: str        # np. 'Weronika Chrabąszcz „dom”'
+    subdir: str = ""  # folder względem folderu z nagraniami, np. 'dom/Weronika Chrabąszcz „dom”';
+                      # pusty = tylko zmiana nazwy w miejscu
+
+    @property
+    def move(self) -> bool:
+        return bool(self.subdir)
 
 
-def make_target(person: str | None, episode_found: bool, episode: str, quote_style: str = "pl") -> Target:
+def make_target(person: str | None, episode: str | None, quote_style: str = "pl") -> Target:
+    """osoba + odcinek → folder odcinka / folder osoby; samo jedno albo nic → zmiana nazwy w miejscu."""
     style = quote_style if (quote_style != "ascii" or ASCII_QUOTES_ALLOWED) else "pl"
     left, right = QUOTE_STYLES.get(style, QUOTE_STYLES["pl"])
     allow_ascii = style == "ascii"
-    episode = clean_episode(episode)
+    episode = clean_episode(episode or "")
 
     def q(text):
         return f"{left}{text}{right}"
 
-    if person and episode_found and episode:
-        label, move = f"{person} {q(episode)}", True
-    elif person:
-        label, move = f"{person} {q(NO_EPISODE_TEXT)}", False
-    elif episode_found and episode:
-        label, move = f"{NO_PERSON_PREFIX} {q(episode)}", False
-    else:
-        label, move = UNKNOWN_LABEL, False
-    return Target(safe_filename(label, allow_ascii), move)
+    if person and episode:
+        label = safe_filename(f"{person} {q(episode)}", allow_ascii)
+        return Target(label, os.path.join(safe_filename(episode), label))
+    if person:
+        return Target(safe_filename(f"{person} {q(NO_EPISODE_TEXT)}", allow_ascii))
+    if episode:
+        return Target(safe_filename(f"{NO_PERSON_PREFIX} {q(episode)}", allow_ascii))
+    return Target(UNKNOWN_LABEL)
 
 
 @dataclass(frozen=True)
 class PriorLabel:
     """To, co wynika z nazwy nadanej wcześniej przez program (poprzednia zgrywka albo ręczna poprawka)."""
     person: str | None = None
-    episode_found: bool = False
+    episode: str | None = None
 
 
 def _split_quoted(label: str) -> tuple[str, str] | None:
@@ -99,7 +119,7 @@ def _split_quoted(label: str) -> tuple[str, str] | None:
     return None
 
 
-def parse_prior_label(filename: str, people: list[str], episode: str) -> PriorLabel | None:
+def parse_prior_label(filename: str, people: list[str], episodes: list[str]) -> PriorLabel | None:
     match = re.fullmatch(r"(.+) \d+", nfc(os.path.splitext(os.path.basename(filename))[0]))
     if not match:
         return None
@@ -110,24 +130,24 @@ def parse_prior_label(filename: str, people: list[str], episode: str) -> PriorLa
     if not split:
         return None
     prefix, inner = split
-    episode = clean_episode(episode)
-    episode_here = bool(episode) and inner.casefold() == safe_filename(episode).casefold()
+    episode = next((e for e in episodes if safe_filename(clean_episode(e)).casefold() == inner.casefold()), None)
     if prefix == NO_PERSON_PREFIX:
-        return PriorLabel(None, episode_here)
+        return PriorLabel(None, episode)
     person = next((p for p in people if safe_filename(p).casefold() == prefix.casefold()), None)
-    return PriorLabel(person, episode_here) if person else None
+    return PriorLabel(person, episode) if person else None
 
 
-def merge_prior(person: str | None, episode_found: bool, prior: PriorLabel | None) -> tuple[str | None, bool, bool]:
+def merge_prior(person: str | None, episode: str | None,
+                prior: PriorLabel | None) -> tuple[str | None, str | None, bool]:
     """Ponowna analiza może tylko dodać informacje, a nie zgubić tych z obecnej nazwy pliku.
     Zwraca (osoba, odcinek, czy_użyto_wcześniejszej_nazwy)."""
     used = False
     if prior:
         if not person and prior.person:
             person, used = prior.person, True
-        if not episode_found and prior.episode_found:
-            episode_found, used = True, True
-    return person, episode_found, used
+        if not episode and prior.episode:
+            episode, used = prior.episode, True
+    return person, episode, used
 
 
 def natural_key(text: str):
@@ -182,7 +202,7 @@ def plan_moves(items: list[tuple[str, Target]], root: str) -> list[PlannedMove]:
     i kontynuuje numery już istniejące w folderze docelowym (np. z poprzedniej zgrywki)."""
     groups: dict[tuple[str, str], list[tuple[str, Target, str]]] = {}
     for src, target in items:
-        directory = os.path.join(root, target.label) if target.move else os.path.dirname(src)
+        directory = os.path.join(root, target.subdir) if target.subdir else os.path.dirname(src)
         key = (os.path.normcase(nfc(os.path.abspath(directory))), nfc(target.label).casefold())
         groups.setdefault(key, []).append((src, target, directory))
 
@@ -229,6 +249,21 @@ def _move(src: str, dst: str) -> None:
         shutil.move(src, dst)  # inny dysk/partycja - kopiowanie i usunięcie
 
 
+def _make_dirs(directory: str, journal) -> None:
+    """Tworzy brakujące foldery (np. 'dom' i 'dom/Weronika Chrabąszcz „dom”') i zapisuje każdy
+    w dzienniku, żeby cofnięcie usunęło je, jeśli zostaną puste."""
+    missing = []
+    while not os.path.isdir(directory):
+        missing.append(directory)
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
+    for path in reversed(missing):
+        os.mkdir(path)
+        journal.write(json.dumps({"mkdir": path}, ensure_ascii=False) + "\n")
+
+
 def apply_moves(plan: list[PlannedMove], journal_dir: str, root: str = "") -> ApplyReport:
     """Przenosi pliki. Każdy wykonany krok jest od razu zapisywany w dzienniku,
     więc operację da się cofnąć nawet po awarii w trakcie."""
@@ -243,10 +278,7 @@ def apply_moves(plan: list[PlannedMove], journal_dir: str, root: str = "") -> Ap
                 report.skipped += 1
                 continue
             try:
-                directory = os.path.dirname(move.dst)
-                if not os.path.isdir(directory):
-                    os.makedirs(directory)
-                    journal.write(json.dumps({"mkdir": directory}, ensure_ascii=False) + "\n")
+                _make_dirs(os.path.dirname(move.dst), journal)
                 _move(move.src, move.dst)
             except OSError as exc:
                 report.errors.append((move, exc.strerror or str(exc)))

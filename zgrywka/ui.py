@@ -1,4 +1,4 @@
-"""Okno programu: przeciągnij folder, wpisz nazwę odcinka, sprawdź i uporządkuj."""
+"""Okno programu: przeciągnij folder, wpisz nazwę odcinka, sprawdź, odsłuchaj i uporządkuj."""
 
 from __future__ import annotations
 
@@ -9,322 +9,65 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QProcess, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtCore import QModelIndex, QProcess, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QGroupBox,
-    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-    QMessageBox, QProgressBar, QProgressDialog, QPushButton, QSpinBox, QSplitter, QStyle, QStyledItemDelegate,
-    QTableView, QTabWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar,
+    QProgressDialog, QPushButton, QSpinBox, QSplitter, QStyle, QTableView, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from . import config
 from .analyzer import FileAnalysis, Recognizer
 from .asr import GPU_PACKAGES, MODELS, Engine, cuda_device_count, local_model_path, nvidia_libs_installed
-from .matching import FIRST, FULL, LAST, PersonMatch
+from .matching import EpisodeMatch, PersonMatch
 from .naming import (
-    ASCII_QUOTES_ALLOWED, NO_EPISODE_TEXT, NO_PERSON_PREFIX, UNKNOWN_LABEL, Target, apply_moves, clean_episode,
-    find_audio_files, journal_summary, latest_journal, make_target, merge_prior, parse_prior_label, plan_moves,
-    undo_journal,
+    ASCII_QUOTES_ALLOWED, NO_EPISODE_TEXT, NO_PERSON_PREFIX, UNKNOWN_LABEL, apply_moves, clean_episode,
+    find_audio_files, journal_summary, latest_journal, make_target, merge_prior, parse_episodes, parse_prior_label,
+    plan_moves, undo_journal,
+)
+from .people import PeoplePanel
+from .player import AudioPlayer, PlayerBar
+from .results import (
+    APPLIED, COL_EPISODE, COL_FILE, COL_HEARD, COL_HOW, COL_NEW, COL_PERSON, COL_PLAY, COLORS, DONE, ERROR,
+    NEW_PERSON, NONE_EPISODE, NONE_PERSON, PENDING, RUNNING, EpisodeDelegate, PersonDelegate, ResultsModel,
 )
 from .worker import AnalysisWorker
 
 log = logging.getLogger(__name__)
 
-PENDING, RUNNING, DONE, ERROR, APPLIED = range(5)
-COLUMNS = ["Plik", "Osoba", "Odcinek", "Nowa nazwa", "Rozpoznanie", "Co usłyszano na początku nagrania"]
-COL_FILE, COL_PERSON, COL_EPISODE, COL_NEW, COL_HOW, COL_HEARD = range(len(COLUMNS))
-NONE_PERSON = "— nie rozpoznano —"
-NEW_PERSON = "＋ Dodaj nową osobę…"
-
-COLORS = {
-    "move": QColor(46, 160, 67, 70),      # osoba + odcinek: do folderu osoby
-    "partial": QColor(230, 160, 0, 85),   # tylko osoba albo tylko odcinek: zmiana nazwy
-    "none": QColor(220, 50, 50, 70),      # nic nie rozpoznano
-    "error": QColor(128, 128, 128, 70),
-    "running": QColor(30, 136, 229, 60),
-}
-
 HELP_TEXT = f"""
 <h3>Jak działa porządkowanie</h3>
 <p>Program słucha początku każdego nagrania (domyślnie 30 sekund, można zmienić w Ustawieniach),
-zamienia mowę na tekst i szuka w nim osób z listy oraz nazwy odcinka. Porównuje litery,
-więc nie trzeba wpisywać żadnych „innych form”:</p>
+zamienia mowę na tekst i szuka w nim osób z listy oraz nazwy odcinka. Porównuje litery:</p>
 <ul>
 <li>przekręcone litery i polska wymowa: „Radek <b>H</b>aberko” = Radek Chaberko,
   „Weronika Hrabążcz” = Weronika Chrabąszcz;</li>
-<li>zgubione albo dodane litery: „<b>adek</b>” = Radek, „Marcel <b>Woński</b>” = Marcel Gawroński;</li>
-<li>odmiana i zdrobnienia: „mikroport Marcela Gawrońskiego”, „Radka”, „tratwa” = „tratwy”;</li>
+<li>zgubione albo dodane litery: „<b>adek</b>, tratwy” = Radek, „Marcel <b>Woński</b>” = Marcel Gawroński;</li>
+<li>odmiana: „mikroport Marcela Gawrońskiego”, „Radka”, „tratwa” = „tratwy”;</li>
 <li>imię i nazwisko obok siebie wystarczą, gdy zgadza się mniej więcej co druga litera;</li>
 <li>samo imię albo samo nazwisko też wystarczy, jeśli nikt inny z listy go nie ma.</li>
 </ul>
-<p>Żeby nie było przypadkowych trafień, luźniejsze dopasowanie (tylko część liter) program
-przyjmuje wyłącznie tam, gdzie zwykle pada nazwisko: na początku nagrania i tuż obok nazwy
-odcinka. Nie bierze też zwykłych słów („miał” to nie Michał, „radę” to nie Radek).
-Takie wiersze są oznaczone dopiskiem <i>„część liter – sprawdź”</i>.</p>
+<p>Zdrobnienia i przezwiska (np. Wera, Nika, Werka) dopisz osobie jako <b>alternatywy</b>:
+dwuklik na osobie w panelu „Osoby” po prawej.</p>
+<p>W polu „Nazwa odcinka” możesz wpisać <b>kilka odcinków oddzielonych spacją</b>
+(np. <i>dom tratwy las</i>, nazwę z kilku słów wpisz w cudzysłowie). Program rozpozna,
+który odcinek pada w nagraniu.</p>
 <table cellpadding="4">
-<tr><td><b>osoba + odcinek</b></td><td>plik trafia do folderu <i>Marcel Gawroński „tratwy”</i>
-  i dostaje nazwę <i>Marcel Gawroński „tratwy” 1</i>, <i>… 2</i> itd.</td></tr>
+<tr><td><b>osoba + odcinek</b></td><td>plik trafia do folderu odcinka i osoby:
+  <i>dom / Weronika Chrabąszcz „dom” / Weronika Chrabąszcz „dom” 1</i>, <i>… 2</i> itd.</td></tr>
 <tr><td><b>sama osoba</b></td><td>tylko zmiana nazwy: <i>Marcel Gawroński „{NO_EPISODE_TEXT}” 1</i></td></tr>
-<tr><td><b>sam odcinek</b></td><td>tylko zmiana nazwy: <i>{NO_PERSON_PREFIX} „tratwy” 1</i></td></tr>
+<tr><td><b>sam odcinek</b></td><td>tylko zmiana nazwy: <i>{NO_PERSON_PREFIX} „dom” 1</i></td></tr>
 <tr><td><b>nic</b></td><td>tylko zmiana nazwy: <i>{UNKNOWN_LABEL} 1</i></td></tr>
 </table>
-<p>Osoby dodajesz i poprawiasz w panelu „Osoby” po prawej (dwuklik zmienia nazwę) albo
-w tabeli: kliknij komórkę w kolumnie „Osoba” i wybierz „Dodaj nową osobę…”.
-Odcinek możesz zaznaczyć lub odznaczyć ręcznie. Dwuklik na wierszu odtwarza nagranie.
-Każde porządkowanie można cofnąć przyciskiem „Cofnij ostatnie”.</p>
-<p>Numeracja kontynuuje istniejące pliki, więc kolejne zgrywki do tego samego folderu
-dostaną dalsze numery. Program nigdy nie nadpisuje istniejących plików.</p>
+<p>W tabeli kliknij komórkę <b>Osoba</b> albo <b>Odcinek</b>, aby wybrać z listy albo wpisać własną nazwę.
+Ikona ▶ (albo dwuklik, albo spacja) odtwarza nagranie w odtwarzaczu na dole okna:
+przewijanie suwakiem, ±10 s, poprzednie/następne nagranie.</p>
+<p>Wiersze z dopiskiem „część liter – sprawdź” warto odsłuchać. Każde porządkowanie można cofnąć
+przyciskiem „Cofnij ostatnie”. Numeracja kontynuuje istniejące pliki, a program nigdy nie nadpisuje
+istniejących plików.</p>
 """
-
-
-# --------------------------------------------------------------------------------------
-# Tabela wyników
-# --------------------------------------------------------------------------------------
-
-@dataclass
-class ResultRow:
-    path: str                          # bieżące położenie pliku
-    original: str                      # nazwa pliku przed porządkowaniem
-    state: int = PENDING
-    analysis: FileAnalysis | None = None
-    person: str | None = None
-    episode_found: bool = False
-    manual: bool = False               # poprawione ręcznie
-    match: PersonMatch | None = None
-    episode_heard: str = ""
-    from_prior: bool = False           # część informacji z nazwy nadanej wcześniej przez program
-    target: Target | None = None
-    new_path: str = ""
-    applied_from: str = ""
-
-    @property
-    def category(self) -> str | None:
-        if self.state == ERROR:
-            return "error"
-        if self.state == RUNNING:
-            return "running"
-        if self.state not in (DONE, APPLIED):
-            return None
-        if self.person and self.episode_found:
-            return "move"
-        return "partial" if (self.person or self.episode_found) else "none"
-
-
-def _qt_tooltip(text: str) -> str:
-    return "<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>"
-
-
-class ResultsModel(QAbstractTableModel):
-    edited = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.rows: list[ResultRow] = []
-        self.people_names: list[str] = []
-        style = QApplication.style()
-        self._icons = {
-            RUNNING: style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload),
-            ERROR: style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning),
-            APPLIED: style.standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton),
-        }
-        self._folder_icon = style.standardIcon(QStyle.StandardPixmap.SP_DirIcon)
-        self._warn_icon = style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
-
-    # --- Qt API ---
-    def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.rows)
-
-    def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(COLUMNS)
-
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return COLUMNS[section]
-        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
-            return str(section + 1)
-        return None
-
-    def flags(self, index):
-        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        row = self.rows[index.row()]
-        if row.state == DONE:
-            if index.column() == COL_PERSON:
-                flags |= Qt.ItemFlag.ItemIsEditable
-            elif index.column() == COL_EPISODE:
-                flags |= Qt.ItemFlag.ItemIsUserCheckable
-        return flags
-
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
-            return None
-        row, col = self.rows[index.row()], index.column()
-        finished = row.state in (DONE, APPLIED)
-        if role == Qt.ItemDataRole.DisplayRole:
-            if col == COL_FILE:
-                return row.original
-            if col == COL_PERSON:
-                return (row.person or "—") if finished else ""
-            if col == COL_EPISODE:
-                return ("tak" if row.episode_found else "nie") if finished else ""
-            if col == COL_NEW:
-                if row.state == APPLIED:
-                    return os.path.basename(row.path)
-                return os.path.basename(row.new_path) if row.new_path and finished else ""
-            if col == COL_HOW:
-                return self._how(row)
-            if col == COL_HEARD:
-                if row.state == ERROR and row.analysis:
-                    return row.analysis.error
-                return " ".join(row.analysis.transcript.split()) if row.analysis else ""
-        elif role == Qt.ItemDataRole.CheckStateRole and col == COL_EPISODE and finished:
-            return Qt.CheckState.Checked if row.episode_found else Qt.CheckState.Unchecked
-        elif role == Qt.ItemDataRole.BackgroundRole:
-            color = COLORS.get(row.category or "")
-            return color
-        elif role == Qt.ItemDataRole.DecorationRole:
-            if col == COL_FILE:
-                return self._icons.get(row.state)
-            if col == COL_NEW and row.target and row.target.move and finished:
-                return self._folder_icon
-            if col == COL_HOW and row.match and (row.match.conflict or row.match.loose) and not row.manual \
-                    and finished:
-                return self._warn_icon
-        elif role == Qt.ItemDataRole.ToolTipRole:
-            return self._tooltip(row, col)
-        elif role == Qt.ItemDataRole.FontRole and col == COL_PERSON and row.manual:
-            font = QFont()
-            font.setItalic(True)
-            return font
-        return None
-
-    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
-        row = self.rows[index.row()]
-        if row.state != DONE:
-            return False
-        if index.column() == COL_PERSON and role == Qt.ItemDataRole.EditRole:
-            row.person = value or None
-        elif index.column() == COL_EPISODE and role == Qt.ItemDataRole.CheckStateRole:
-            row.episode_found = Qt.CheckState(value) == Qt.CheckState.Checked
-        else:
-            return False
-        row.manual = True
-        self.row_changed(index.row())
-        self.edited.emit()
-        return True
-
-    # --- pomocnicze ---
-    def _how(self, row: ResultRow) -> str:
-        if row.state == PENDING:
-            return "czeka"
-        if row.state == RUNNING:
-            return "słucham…"
-        if row.state == ERROR:
-            return "błąd odczytu"
-        if row.manual:
-            return "poprawione ręcznie"
-        m = row.match
-        if m and m.person:
-            kind = {FULL: "imię i nazwisko", FIRST: "samo imię", LAST: "samo nazwisko"}[m.kind]
-            if m.loose:
-                kind += " (część liter)"
-            text = f"{kind}: „{m.heard}”" + (" – sprawdź" if m.conflict or m.loose else "")
-        elif m and m.ambiguous:
-            text = "pasuje do kilku: " + ", ".join(p.name for p in m.ambiguous)
-        else:
-            text = ""
-        if row.from_prior:
-            return f"{text} • reszta z wcześniejszej nazwy" if text else "z wcześniejszej nazwy pliku"
-        return text or "nie rozpoznano osoby"
-
-    def _tooltip(self, row: ResultRow, col: int) -> str | None:
-        if col == COL_FILE:
-            lines = [row.path]
-            if row.analysis and row.analysis.duration:
-                lines.append(f"Długość: {_format_duration(row.analysis.duration)}")
-            if row.applied_from:
-                lines.append(f"Poprzednio: {row.applied_from}")
-            return _qt_tooltip("\n".join(lines))
-        if col == COL_PERSON and row.state == DONE:
-            return "Kliknij, aby wybrać inną osobę"
-        if col == COL_EPISODE and row.episode_heard:
-            return _qt_tooltip(f"Usłyszano: „{row.episode_heard}”")
-        if col == COL_NEW and (row.new_path or row.state == APPLIED):
-            path = row.path if row.state == APPLIED else row.new_path
-            where = "przeniesiono do" if row.state == APPLIED else "zostanie zapisany jako"
-            return _qt_tooltip(f"Plik {where}:\n{path}")
-        if col == COL_HOW and row.match and row.match.conflict:
-            return "W nagraniu padło kilka osób z listy – sprawdź, czy wybrano właściwą."
-        if col == COL_HOW and row.match and row.match.loose:
-            return ("Zgadza się tylko część liter (np. zgubiona lub przekręcona litera) – "
-                    "dwuklik odtworzy nagranie, żeby to sprawdzić.")
-        if col == COL_HEARD and row.analysis:
-            parts = [t for t in row.analysis.transcripts if t]
-            if len(parts) > 1:
-                return _qt_tooltip("1. próba (z podpowiedzią):\n" + parts[0] + "\n\n2. próba:\n" + parts[1])
-            return _qt_tooltip(parts[0]) if parts else (row.analysis.error or "Nic nie usłyszano")
-        return None
-
-    def row_changed(self, r: int) -> None:
-        self.dataChanged.emit(self.index(r, 0), self.index(r, len(COLUMNS) - 1))
-
-    def set_files(self, paths: list[str]) -> None:
-        self.beginResetModel()
-        self.rows = [ResultRow(p, os.path.basename(p)) for p in paths]
-        self.endResetModel()
-
-    def set_state(self, r: int, state: int) -> None:
-        self.rows[r].state = state
-        self.row_changed(r)
-
-    def apply_decision(self, r: int, match: PersonMatch, person: str | None, episode_found: bool,
-                       episode_heard: str, from_prior: bool) -> None:
-        row = self.rows[r]
-        row.match, row.person, row.episode_found = match, person, episode_found
-        row.episode_heard, row.from_prior = episode_heard, from_prior
-        self.row_changed(r)
-
-    def refresh(self) -> None:
-        if self.rows:
-            self.dataChanged.emit(self.index(0, 0), self.index(len(self.rows) - 1, len(COLUMNS) - 1))
-
-
-class PersonDelegate(QStyledItemDelegate):
-    """Lista rozwijana z osobami w kolumnie "Osoba" (z możliwością dodania nowej osoby)."""
-    NEW = "\x00nowa"
-
-    def __init__(self, model: ResultsModel, ask_new_person, parent=None):
-        super().__init__(parent)
-        self.model = model
-        self.ask_new_person = ask_new_person
-
-    def createEditor(self, parent, option, index):
-        combo = QComboBox(parent)
-        combo.addItem(NONE_PERSON, "")
-        for name in self.model.people_names:
-            combo.addItem(name, name)
-        combo.addItem(NEW_PERSON, self.NEW)
-        combo.activated.connect(lambda _i, c=combo: (self.commitData.emit(c), self.closeEditor.emit(c)))
-        return combo
-
-    def setEditorData(self, editor, index):
-        current = self.model.rows[index.row()].person or ""
-        i = editor.findData(current)
-        if i < 0 and current:
-            editor.addItem(current, current)
-            i = editor.count() - 1
-        editor.setCurrentIndex(max(0, i))
-        QTimer.singleShot(0, editor.showPopup)
-
-    def setModelData(self, editor, model, index):
-        value = editor.currentData()
-        if value == self.NEW:
-            value = self.ask_new_person(editor.window())
-            if value is None:
-                return
-        model.setData(index, value, Qt.ItemDataRole.EditRole)
 
 
 # --------------------------------------------------------------------------------------
@@ -392,120 +135,6 @@ class DropZone(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
 
-
-class PeoplePanel(QWidget):
-    """Lista osób w głównym oknie: dodawanie, poprawianie (dwuklik) i usuwanie."""
-    changed = Signal()
-
-    def __init__(self, settings: config.Settings, parent=None):
-        super().__init__(parent)
-        self.settings = settings
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 0, 0, 0)
-        self.title = QLabel()
-        font = self.title.font()
-        font.setPointSizeF(font.pointSizeF() * 1.15)
-        font.setBold(True)
-        self.title.setFont(font)
-        layout.addWidget(self.title)
-        hint = QLabel("Tak jak tu wpiszesz, tak będą nazwane foldery i pliki. Przekręcone "
-                      "i zgubione litery program wyłapie sam. Dwuklik poprawia nazwę.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: palette(placeholder-text);")
-        layout.addWidget(hint)
-        self.list = QListWidget()
-        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.list.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
-                                  | QAbstractItemView.EditTrigger.EditKeyPressed)
-        layout.addWidget(self.list, 1)
-        buttons = QHBoxLayout()
-        style = self.style()
-        add = QPushButton(style.standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder), " Dodaj osobę")
-        add.clicked.connect(lambda: self.ask_new_person())
-        self.remove_button = QPushButton(style.standardIcon(QStyle.StandardPixmap.SP_TrashIcon), " Usuń")
-        self.remove_button.clicked.connect(self.remove_selected)
-        buttons.addWidget(add, 1)
-        buttons.addWidget(self.remove_button)
-        layout.addLayout(buttons)
-        self._load(settings.people)
-        self.list.itemChanged.connect(self._on_item_changed)
-        self.list.itemSelectionChanged.connect(
-            lambda: self.remove_button.setEnabled(bool(self.list.selectedItems())))
-        self.remove_button.setEnabled(False)
-
-    def _load(self, names: list[str]) -> None:
-        self.list.blockSignals(True)
-        self.list.clear()
-        for name in names:
-            self._append(name)
-        self.list.blockSignals(False)
-        self._update_title()
-
-    def _append(self, name: str) -> QListWidgetItem:
-        item = QListWidgetItem(name)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-        self.list.addItem(item)
-        return item
-
-    def names(self) -> list[str]:
-        return config.clean_people(self.list.item(i).text() for i in range(self.list.count()))
-
-    def _update_title(self) -> None:
-        self.title.setText(f"Osoby ({self.list.count()})")
-
-    def _on_item_changed(self, item: QListWidgetItem) -> None:
-        name = " ".join(item.text().split())
-        others = [self.list.item(i).text().casefold() for i in range(self.list.count())
-                  if self.list.item(i) is not item]
-        if not name or name.casefold() in others:
-            # puste albo powtórzone - przywracamy poprzednią listę
-            self.list.blockSignals(True)
-            item.setText(self.settings.people[self.list.row(item)] if self.list.row(item) < len(self.settings.people)
-                         else "")
-            self.list.blockSignals(False)
-            if not item.text():
-                self.list.takeItem(self.list.row(item))
-            if name:
-                QMessageBox.information(self, config.APP_NAME, f"Osoba „{name}” już jest na liście.")
-        elif name != item.text():
-            self.list.blockSignals(True)
-            item.setText(name)
-            self.list.blockSignals(False)
-        self._save()
-
-    def _save(self) -> None:
-        self.settings.people = self.names()
-        self._update_title()
-        self.changed.emit()
-
-    def ask_new_person(self, parent: QWidget | None = None) -> str | None:
-        """Pyta o imię i nazwisko nowej osoby i dodaje ją do listy. Zwraca nazwę albo None."""
-        name, ok = QInputDialog.getText(parent or self, config.APP_NAME,
-                                        "Imię i nazwisko nowej osoby (tak będą nazwane foldery i pliki):")
-        name = " ".join(name.split())
-        if not ok or not name:
-            return None
-        existing = {n.casefold(): n for n in self.names()}
-        if name.casefold() in existing:
-            return existing[name.casefold()]
-        self.list.blockSignals(True)
-        self.list.setCurrentItem(self._append(name))
-        self.list.blockSignals(False)
-        self.remove_button.setEnabled(True)
-        self._save()
-        return name
-
-    def remove_selected(self) -> None:
-        items = self.list.selectedItems()
-        if not items:
-            return
-        names = ", ".join(i.text() for i in items)
-        answer = QMessageBox.question(self, config.APP_NAME, f"Usunąć z listy: {names}?")
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        for item in items:
-            self.list.takeItem(self.list.row(item))
-        self._save()
 
 
 class SettingsTab(QWidget):
@@ -719,13 +348,6 @@ def reveal_in_folder(path: str) -> None:
     open_path(os.path.dirname(path))
 
 
-def _format_duration(seconds: float) -> str:
-    seconds = int(round(seconds))
-    h, rem = divmod(seconds, 3600)
-    m, s = divmod(rem, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-
-
 def _format_eta(seconds: float) -> str:
     if seconds < 60:
         return f"{max(1, int(seconds))} s"
@@ -754,6 +376,7 @@ def app_icon() -> QIcon:
     return icon
 
 
+
 # --------------------------------------------------------------------------------------
 # Okno główne
 # --------------------------------------------------------------------------------------
@@ -774,9 +397,12 @@ class MainWindow(QMainWindow):
 
         self.results = ResultsModel(self)
         self.results.edited.connect(self.recompute_plan)
-
+        self.player = AudioPlayer(self)
+        self.player.state_changed.connect(self.on_player_state)
+        self.player.error.connect(lambda message: self.statusBar().showMessage(message, 10000))
         self.people_panel = PeoplePanel(settings)
         self.people_panel.changed.connect(self.on_people_changed)
+
         tabs = QTabWidget()
         tabs.addTab(self._build_main_tab(), "Zgrywka")
         self.settings_tab = SettingsTab(settings)
@@ -789,11 +415,13 @@ class MainWindow(QMainWindow):
         self._save_timer = QTimer(self, singleShot=True, interval=500, timeout=self.save_settings)
         self._rematch_timer = QTimer(self, singleShot=True, interval=350, timeout=self.rematch)
         self.on_people_changed(save=False)
+        self.results.episodes = parse_episodes(self.episode_edit.text())
+        self._update_episode_chips()
         self.update_buttons()
         if settings.window_geometry:
             self.restoreGeometry(bytes.fromhex(settings.window_geometry))
         else:
-            self.resize(1280, 780)
+            self.resize(1380, 820)
 
     # --- budowa interfejsu ---
     def _build_main_tab(self) -> QWidget:
@@ -807,11 +435,11 @@ class MainWindow(QMainWindow):
         big.setPointSizeF(big.pointSizeF() * 1.3)
         label.setFont(big)
         self.episode_edit = QLineEdit(self.settings.episode)
-        self.episode_edit.setPlaceholderText("np. tratwy")
+        self.episode_edit.setPlaceholderText("np. tratwy   (kilka odcinków oddziel spacją: dom tratwy las)")
         self.episode_edit.setFont(big)
         self.episode_edit.setClearButtonEnabled(True)
-        self.episode_edit.setToolTip("Nazwa odcinka, którą mówi się na początku nagrania. "
-                                     "Trafi do nazw folderów i plików.")
+        self.episode_edit.setToolTip("Nazwa odcinka, którą mówi się na początku nagrania. Kilka odcinków oddziel "
+                                     "spacją; nazwę z kilku słów wpisz w cudzysłowie, np. \"stara chata\".")
         self.episode_edit.textChanged.connect(self.on_episode_changed)
         help_button = QPushButton("Jak to działa?")
         help_button.clicked.connect(lambda: QMessageBox.information(self, config.APP_NAME, HELP_TEXT))
@@ -819,6 +447,9 @@ class MainWindow(QMainWindow):
         top.addWidget(self.episode_edit, 1)
         top.addWidget(help_button)
         layout.addLayout(top)
+        self.episodes_label = QLabel()
+        self.episodes_label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(self.episodes_label)
 
         self.drop_zone = DropZone()
         self.drop_zone.folder_dropped.connect(lambda p: self.open_folder(p, autostart=True))
@@ -827,15 +458,15 @@ class MainWindow(QMainWindow):
 
         buttons = QHBoxLayout()
         style = self.style()
-        self.start_button = QPushButton(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay), " Rozpoznaj nagrania")
+        P = QStyle.StandardPixmap
+        self.start_button = QPushButton(style.standardIcon(P.SP_MediaPlay), " Rozpoznaj nagrania")
         self.start_button.clicked.connect(lambda: self.start_analysis())
-        self.stop_button = QPushButton(style.standardIcon(QStyle.StandardPixmap.SP_MediaStop), " Zatrzymaj")
+        self.stop_button = QPushButton(style.standardIcon(P.SP_MediaStop), " Zatrzymaj")
         self.stop_button.clicked.connect(self.stop_analysis)
-        self.apply_button = QPushButton(style.standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton),
-                                        " Uporządkuj pliki")
+        self.apply_button = QPushButton(style.standardIcon(P.SP_DialogApplyButton), " Uporządkuj pliki")
         self.apply_button.setToolTip("Utwórz foldery, przenieś i ponumeruj pliki zgodnie z kolumną „Nowa nazwa”")
         self.apply_button.clicked.connect(self.apply)
-        self.undo_button = QPushButton(style.standardIcon(QStyle.StandardPixmap.SP_ArrowBack), " Cofnij ostatnie")
+        self.undo_button = QPushButton(style.standardIcon(P.SP_ArrowBack), " Cofnij ostatnie")
         self.undo_button.clicked.connect(self.undo_last)
         for b in (self.start_button, self.stop_button, self.apply_button, self.undo_button):
             b.setIconSize(QSize(18, 18))
@@ -861,8 +492,9 @@ class MainWindow(QMainWindow):
 
         self.table = QTableView()
         self.table.setModel(self.results)
-        self.table.setItemDelegateForColumn(
-            COL_PERSON, PersonDelegate(self.results, self.people_panel.ask_new_person, self.table))
+        self.table.setItemDelegateForColumn(COL_PERSON, PersonDelegate(
+            self.results, self.people_panel.ask_new_person, self.people_panel.ensure_person, self.table))
+        self.table.setItemDelegateForColumn(COL_EPISODE, EpisodeDelegate(self.results, self.table))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.SelectedClicked
                                    | QAbstractItemView.EditTrigger.DoubleClicked
@@ -875,25 +507,45 @@ class MainWindow(QMainWindow):
         self.table.clicked.connect(self.on_click)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
-        for col, width in ((COL_FILE, 190), (COL_PERSON, 180), (COL_EPISODE, 80), (COL_NEW, 330), (COL_HOW, 250)):
+        header.setSectionResizeMode(COL_PLAY, QHeaderView.ResizeMode.Fixed)
+        for col, width in ((COL_PLAY, 30), (COL_FILE, 170), (COL_PERSON, 180), (COL_EPISODE, 110),
+                           (COL_NEW, 330), (COL_HOW, 240)):
             self.table.setColumnWidth(col, width)
         self.table.verticalHeader().setDefaultSectionSize(26)
+        QShortcut(QKeySequence(Qt.Key.Key_Space), self.table, self.toggle_play,
+                  context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         layout.addWidget(self.table, 1)
 
         self.summary_label = QLabel("")
         self.summary_label.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(self.summary_label)
 
+        self.player_bar = PlayerBar(self.player)
+        self.player_bar.previous_requested.connect(lambda: self.play_adjacent(-1))
+        self.player_bar.next_requested.connect(lambda: self.play_adjacent(1))
+        layout.addWidget(self.player_bar)
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(content)
         splitter.addWidget(self.people_panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.setSizes([1000, 260])
+        splitter.setSizes([1100, 270])
         splitter.setChildrenCollapsible(False)
         page = QWidget()
         QVBoxLayout(page).addWidget(splitter)
         return page
+
+    def _update_episode_chips(self) -> None:
+        episodes = self.results.episodes
+        if not episodes:
+            self.episodes_label.setText("<i>Wpisz nazwę odcinka. Kilka odcinków oddziel spacją, "
+                                        "np. dom tratwy las.</i>")
+            return
+        chips = " ".join(f"<span style='background-color:#2563eb; color:#ffffff;'>&nbsp;{html.escape(e)}&nbsp;</span>"
+                         for e in episodes)
+        word = "Odcinki" if len(episodes) > 1 else "Odcinek"
+        self.episodes_label.setText(f"{word} do rozpoznania: {chips}")
 
     # --- przeciąganie na całe okno ---
     def dragEnterEvent(self, event):
@@ -944,6 +596,7 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.warning(self, config.APP_NAME, f"Nie można otworzyć folderu:\n{folder}\n\n{exc}")
             return
+        self.player.stop()
         self.folder = folder
         self.settings.last_folder = folder
         self._save_timer.start()
@@ -963,11 +616,12 @@ class MainWindow(QMainWindow):
                                        "„Szukaj nagrań także w podfolderach”."))
             return
         if autostart:
-            if not clean_episode(self.episode_edit.text()):
+            if not self.results.episodes:
                 self.statusBar().showMessage("Wpisz nazwę odcinka i kliknij „Rozpoznaj nagrania”.")
                 self.episode_edit.setFocus()
                 QMessageBox.information(self, config.APP_NAME,
-                                        "Wpisz nazwę odcinka (np. tratwy), a potem kliknij „Rozpoznaj nagrania”.")
+                                        "Wpisz nazwę odcinka (np. tratwy, a kilka odcinków oddziel spacją), "
+                                        "a potem kliknij „Rozpoznaj nagrania”.")
                 return
             self.start_analysis()
 
@@ -981,8 +635,8 @@ class MainWindow(QMainWindow):
     def start_analysis(self, rows: list[int] | None = None) -> None:
         if self.busy or not self.results.rows:
             return
-        episode = clean_episode(self.episode_edit.text())
-        if not episode:
+        episodes = self.results.episodes
+        if not episodes:
             answer = QMessageBox.question(
                 self, config.APP_NAME,
                 "Nie wpisano nazwy odcinka.\n\nKontynuować? Pliki z rozpoznaną osobą dostaną wtedy "
@@ -1002,10 +656,10 @@ class MainWindow(QMainWindow):
         for r, _ in jobs:
             row = self.results.rows[r]
             row.state, row.analysis, row.match, row.manual, row.new_path, row.target = PENDING, None, None, False, "", None
-            row.person, row.episode_found, row.episode_heard, row.from_prior = None, False, "", False
+            row.person, row.episode, row.episode_heard, row.episode_loose, row.from_prior = None, None, "", False, False
         self.results.refresh()
         self.cancel_requested = False
-        self.worker = AnalysisWorker(self._get_engine(), jobs, people, episode, self.settings.seconds,
+        self.worker = AnalysisWorker(self._get_engine(), jobs, people, list(episodes), self.settings.seconds,
                                      self.settings.use_hints, self.settings.second_pass, self)
         self.worker.status.connect(self.on_status)
         self.worker.download_progress.connect(self.on_download_progress)
@@ -1059,12 +713,13 @@ class MainWindow(QMainWindow):
         self._set_decision(r, analysis.person, analysis.episode)
         self.recompute_plan()
 
-    def _set_decision(self, r: int, match: PersonMatch, episode) -> None:
+    def _set_decision(self, r: int, match: PersonMatch, episode: EpisodeMatch) -> None:
         """Wynik rozpoznania uzupełniony o to, co już było w nazwie pliku nadanej wcześniej przez program."""
-        prior = parse_prior_label(self.results.rows[r].original, self.results.people_names,
-                                  self.episode_edit.text())
-        person, found, used = merge_prior(match.person.name if match.person else None, episode.found, prior)
-        self.results.apply_decision(r, match, person, found, episode.heard, used)
+        prior = parse_prior_label(self.results.rows[r].original, self.results.people_names, self.results.episodes)
+        person, episode_name, used = merge_prior(match.person.name if match.person else None,
+                                                 episode.name if episode.found else None, prior)
+        self.results.apply_decision(r, match, person, episode_name, episode.heard if episode.found else "",
+                                    episode.found and episode.loose, used)
 
     def on_progress(self, done: int, total: int, remaining: float) -> None:
         self.progress.setValue(done)
@@ -1081,7 +736,7 @@ class MainWindow(QMainWindow):
         self.worker.deleteLater()
         self.worker = None
         self.progress.setVisible(False)
-        for r, row in enumerate(self.results.rows):
+        for row in self.results.rows:
             if row.state in (PENDING, RUNNING):
                 row.state = PENDING
         self.results.refresh()
@@ -1099,6 +754,8 @@ class MainWindow(QMainWindow):
     # --- dopasowanie i plan ---
     def on_episode_changed(self, text: str) -> None:
         self.settings.episode = text
+        self.results.episodes = parse_episodes(text)
+        self._update_episode_chips()
         self._save_timer.start()
         self._rematch_timer.start()
 
@@ -1116,9 +773,9 @@ class MainWindow(QMainWindow):
         self.recompute_plan()
 
     def rematch(self) -> None:
-        """Po zmianie nazwy odcinka lub listy osób - ponowne dopasowanie z zapisanych transkrypcji
+        """Po zmianie odcinków lub listy osób - ponowne dopasowanie z zapisanych transkrypcji
         (bez ponownego słuchania nagrań)."""
-        recognizer = Recognizer(self.settings.person_objects(), clean_episode(self.episode_edit.text()))
+        recognizer = Recognizer(self.settings.person_objects(), self.results.episodes)
         for r, row in enumerate(self.results.rows):
             if row.state == DONE and row.analysis and not row.manual:
                 person, episode = recognizer.decide(row.analysis.transcripts, row.analysis.hinted)
@@ -1126,11 +783,10 @@ class MainWindow(QMainWindow):
         self.recompute_plan()
 
     def recompute_plan(self) -> None:
-        episode = clean_episode(self.episode_edit.text())
         items = []
         for row in self.results.rows:
             if row.state == DONE:
-                row.target = make_target(row.person, row.episode_found, episode, self.settings.quote_style)
+                row.target = make_target(row.person, row.episode, self.settings.quote_style)
                 items.append((row.path, row.target))
             elif row.state != APPLIED:
                 row.target, row.new_path = None, ""
@@ -1159,8 +815,8 @@ class MainWindow(QMainWindow):
             rgb = f"rgba({color.red()},{color.green()},{color.blue()},{color.alpha() / 255:.2f})"
             return f"<span style='background:{rgb}'>&nbsp;&nbsp;&nbsp;&nbsp;</span>&nbsp;{text}"
 
-        labels = (("move", "do folderów osób"), ("partial", "tylko zmiana nazwy"), ("none", "nie rozpoznano"),
-                  ("error", "błędy odczytu (pliki zostaną bez zmian)"))
+        labels = (("move", "do folderów odcinków i osób"), ("partial", "tylko zmiana nazwy"),
+                  ("none", "nie rozpoznano"), ("error", "błędy odczytu (pliki zostaną bez zmian)"))
         parts = [chip(COLORS[key], f"{text}: <b>{counts[key]}</b>") for key, text in labels
                  if counts[key] or (key != "error" and not applied)]
         if applied:
@@ -1172,12 +828,10 @@ class MainWindow(QMainWindow):
         if self.busy:
             return
         self.recompute_plan()
-        moves = [(r, row) for r, row in enumerate(self.results.rows)
-                 if row.state == DONE and row.new_path and not _same(row.path, row.new_path)]
-        if not moves:
+        if not self._has_pending_changes():
             QMessageBox.information(self, config.APP_NAME, "Nie ma nic do zmiany.")
             return
-        episode = clean_episode(self.episode_edit.text())
+        self.player.stop()  # odtwarzany plik musi być zamknięty, zanim go przeniesiemy
         items = [(row.path, row.target) for row in self.results.rows if row.state == DONE]
         plan = plan_moves(items, self.folder)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -1194,14 +848,14 @@ class MainWindow(QMainWindow):
         self.recompute_plan()
         moved_to_folders = sum(1 for m in report.moved if m.target.move)
         renamed = len(report.moved) - moved_to_folders
-        message = (f"Przeniesiono do folderów osób: {moved_to_folders}\n"
+        message = (f"Przeniesiono do folderów odcinków i osób: {moved_to_folders}\n"
                    f"Zmieniono tylko nazwę: {renamed}")
         if report.errors:
             message += f"\n\nNie udało się ({len(report.errors)}):\n" + "\n".join(
                 f"• {os.path.basename(m.src)}: {err}" for m, err in report.errors[:15])
         if self.settings.save_report and report.moved:
             try:
-                path = self.write_report(episode)
+                path = self.write_report()
                 message += f"\n\nRaport: {os.path.basename(path)}"
             except OSError as exc:
                 message += f"\n\nNie udało się zapisać raportu: {exc}"
@@ -1216,7 +870,7 @@ class MainWindow(QMainWindow):
         if box.clickedButton() is open_button:
             open_path(self.folder)
 
-    def write_report(self, episode: str) -> str:
+    def write_report(self) -> str:
         path = os.path.join(self.folder, time.strftime("zgrywka_raport_%Y-%m-%d_%H-%M-%S.csv"))
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f, delimiter=";")
@@ -1225,8 +879,8 @@ class MainWindow(QMainWindow):
                 if row.state not in (APPLIED, DONE, ERROR):
                     continue
                 writer.writerow([
-                    row.original, os.path.relpath(row.path, self.folder), row.person or "",
-                    episode if row.episode_found else "", self.results.data(self.results.index(r, COL_HOW)),
+                    row.original, os.path.relpath(row.path, self.folder), row.person or "", row.episode or "",
+                    self.results.data(self.results.index(r, COL_HOW)),
                     row.analysis.transcript if row.analysis else "",
                 ])
         return path
@@ -1243,9 +897,10 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self, config.APP_NAME,
             f"Cofnąć ostatnie porządkowanie?\n\nFolder: {root}\nPlików: {count}\n\n"
-            "Pliki wrócą do poprzednich nazw i miejsc, a puste foldery osób zostaną usunięte.")
+            "Pliki wrócą do poprzednich nazw i miejsc, a puste foldery odcinków i osób zostaną usunięte.")
         if answer != QMessageBox.StandardButton.Yes:
             return
+        self.player.stop()
         report = undo_journal(journal)
         for row in self.results.rows:
             if row.state == APPLIED and row.applied_from and os.path.exists(row.applied_from):
@@ -1257,6 +912,40 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, config.APP_NAME, message)
         self.update_buttons()
 
+    # --- odsłuch ---
+    def play_row(self, r: int) -> None:
+        if not 0 <= r < len(self.results.rows):
+            return
+        row = self.results.rows[r]
+        if self.results.playing_row == r and self.player.path == row.path:
+            self.player.toggle()
+            return
+        if self.player.load(row.path):
+            self.results.set_playing(r, False)
+            self.player_bar.set_title(os.path.basename(row.path))
+            self.table.selectRow(r)
+            self.player.play()
+
+    def play_adjacent(self, step: int) -> None:
+        current = self.results.playing_row
+        if current is None:
+            rows = self.selected_rows()
+            current = rows[0] - step if rows else -step if step > 0 else len(self.results.rows)
+        target = current + step
+        if 0 <= target < len(self.results.rows):
+            self.play_row(target)
+
+    def toggle_play(self) -> None:
+        if self.player.path and self.results.playing_row is not None:
+            self.player.toggle()
+        else:
+            rows = self.selected_rows()
+            if rows:
+                self.play_row(rows[0])
+
+    def on_player_state(self, state: str) -> None:
+        self.results.set_playing(self.results.playing_row, state == "playing")
+
     # --- tabela: menu i kliknięcia ---
     def selected_rows(self) -> list[int]:
         return sorted({i.row() for i in self.table.selectionModel().selectedRows()})
@@ -1264,12 +953,19 @@ class MainWindow(QMainWindow):
     def on_click(self, index: QModelIndex) -> None:
         if QApplication.keyboardModifiers() != Qt.KeyboardModifier.NoModifier:
             return  # zaznaczanie wielu wierszy
-        if index.column() == COL_PERSON and self.results.flags(index) & Qt.ItemFlag.ItemIsEditable:
+        column = index.column()
+        if column == COL_PLAY:
+            self.play_row(index.row())
+            return
+        if column == COL_HOW:  # kliknięcie w "Rozpoznanie" - poprawa osoby
+            index = self.results.index(index.row(), COL_PERSON)
+            column = COL_PERSON
+        if column in (COL_PERSON, COL_EPISODE) and self.results.flags(index) & Qt.ItemFlag.ItemIsEditable:
             self.table.edit(index)
 
     def on_double_click(self, index: QModelIndex) -> None:
-        if index.column() not in (COL_PERSON, COL_EPISODE):
-            open_path(self.results.rows[index.row()].path)
+        if index.column() in (COL_FILE, COL_NEW, COL_HEARD):
+            self.play_row(index.row())
 
     def show_context_menu(self, pos) -> None:
         index = self.table.indexAt(pos)
@@ -1278,7 +974,8 @@ class MainWindow(QMainWindow):
         rows = self.selected_rows() or [index.row()]
         menu = QMenu(self)
         first = self.results.rows[rows[0]]
-        menu.addAction("Odtwórz nagranie", lambda: open_path(first.path))
+        menu.addAction("Odsłuchaj w programie", lambda: self.play_row(rows[0]))
+        menu.addAction("Otwórz w zewnętrznym odtwarzaczu", lambda: open_path(first.path))
         menu.addAction("Pokaż w folderze", lambda: reveal_in_folder(first.path))
         editable = [r for r in rows if self.results.rows[r].state == DONE]
         if editable and not self.busy:
@@ -1288,8 +985,12 @@ class MainWindow(QMainWindow):
                 people_menu.addAction(name, lambda n=name: self.set_rows(editable, person=None if n == NONE_PERSON else n))
             people_menu.addSeparator()
             people_menu.addAction(NEW_PERSON, lambda: self.assign_new_person(editable))
-            menu.addAction("Odcinek: rozpoznany", lambda: self.set_rows(editable, episode=True))
-            menu.addAction("Odcinek: nie rozpoznany", lambda: self.set_rows(editable, episode=False))
+            episode_menu = menu.addMenu("Ustaw odcinek")
+            episode_menu.addAction(NONE_EPISODE, lambda: self.set_rows(editable, episode=None))
+            for episode in self.results.episodes:
+                episode_menu.addAction(episode, lambda e=episode: self.set_rows(editable, episode=e))
+            episode_menu.addSeparator()
+            episode_menu.addAction("Wpisz inny odcinek…", lambda: self.ask_episode(editable))
             menu.addAction("Przywróć rozpoznanie automatyczne", lambda: self.reset_manual(editable))
         again = [r for r in rows if self.results.rows[r].state in (DONE, ERROR)]
         if again and not self.busy:
@@ -1304,7 +1005,7 @@ class MainWindow(QMainWindow):
             if person is not self._UNSET:
                 row.person = person
             if episode is not self._UNSET:
-                row.episode_found = episode
+                row.episode = episode
             row.manual = True
         self.recompute_plan()
 
@@ -1312,6 +1013,13 @@ class MainWindow(QMainWindow):
         name = self.people_panel.ask_new_person(self)
         if name:
             self.set_rows(rows, person=name)
+
+    def ask_episode(self, rows: list[int]) -> None:
+        text, ok = QInputDialog.getText(self, config.APP_NAME, "Nazwa odcinka dla zaznaczonych nagrań:")
+        episode = clean_episode(text)
+        if ok and episode:
+            episode = next((e for e in self.results.episodes if e.casefold() == episode.casefold()), episode)
+            self.set_rows(rows, episode=episode)
 
     def reset_manual(self, rows: list[int]) -> None:
         for r in rows:
@@ -1340,6 +1048,7 @@ class MainWindow(QMainWindow):
             self.progress_label.setText("Zamykanie po bieżącym pliku…")
             event.ignore()
             return
+        self.player.close()
         self.save_settings()
         event.accept()
 

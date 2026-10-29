@@ -11,7 +11,7 @@ FILLER = "sprawdzamy jeszcze poziom dźwięku, dobrze, to teraz idziemy na plan 
 
 @pytest.fixture(scope="module")
 def rec():
-    return Recognizer(PEOPLE, "tratwy")
+    return Recognizer(PEOPLE, ["tratwy"])
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -108,3 +108,48 @@ Trasa na jutro jest już rozpisana.""".splitlines()
 def test_chatter_is_not_recognized(rec, text):
     person, episode = rec.match(text)
     assert person.person is None and not episode.found, (text, person, episode)
+
+
+def test_several_episodes_pick_the_one_said(rec):
+    multi = Recognizer(PEOPLE, ["dom", "tratwy", "las"])
+    person, episode = multi.match("Weronika Chrabąszcz, dom. " + FILLER)
+    assert person.person.name == "Weronika Chrabąszcz" and episode.name == "dom"
+    _, episode = multi.match("Marcel Gawroński, tratwa. " + FILLER)
+    assert episode.name == "tratwy"
+    _, episode = multi.match("Radek Chaberko. " + FILLER)
+    assert not episode.found
+
+
+def test_short_episode_name_must_be_exact():
+    multi = Recognizer(PEOPLE, ["dom"])
+    assert multi.match("Eliza Macudzińska, dom.")[1].found
+    assert not multi.match("Eliza Macudzińska, tom drugi.")[1].found   # bez "fonetyki" dla krótkich nazw
+    assert not multi.match("Eliza Macudzińska, domy.")[1].found
+
+
+ALTERNATIVES = [Person("Weronika Chrabąszcz", ("Wera", "Nika", "Werka")),
+                Person("Radek Chaberko", ("Radosław Chaberko",)), Person("Michał Chaberko")]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Wera, tratwy. " + FILLER, "Weronika Chrabąszcz"),            # samo zdrobnienie
+    ("Nika Chrabąszcz, tratwy. " + FILLER, "Weronika Chrabąszcz"),  # zdrobnienie + nazwisko
+    ("Mikroport Niki, tratwy. " + FILLER, "Weronika Chrabąszcz"),   # odmiana zdrobnienia
+    ("Werką. " + FILLER, "Weronika Chrabąszcz"),
+    ("Radosław Chaberko, tratwy. " + FILLER, "Radek Chaberko"),     # pełne imię z nazwiskiem
+])
+def test_alternatives_from_person_dialog(text, expected):
+    person, _ = Recognizer(ALTERNATIVES, ["tratwy"]).match(text)
+    assert person.person is not None and person.person.name == expected, (text, person)
+
+
+def test_alternatives_do_not_catch_common_words():
+    rec = Recognizer(ALTERNATIVES, ["tratwy"])
+    assert rec.match("Nikt nie przyszedł. " + FILLER)[0].person is None    # "nikt" to nie "Nika"
+    assert rec.match("Werbel gra w tle. " + FILLER)[0].person is None
+
+
+def test_shared_alternative_is_ambiguous():
+    people = [Person("Aleksandra Nowak", ("Ola",)), Person("Olga Lis", ("Ola",))]
+    person, _ = Recognizer(people, ["dom"]).match("Ola, dom. " + FILLER)
+    assert person.person is None

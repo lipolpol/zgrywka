@@ -9,7 +9,7 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass, field
 
-from .matching import Person
+from .matching import Person, parse_alternatives
 
 APP_NAME = "Zgrywka MXB"
 APP_ID = "ZgrywkaMXB"
@@ -71,7 +71,8 @@ def log_path() -> str:
 @dataclass
 class Settings:
     episode: str = ""
-    people: list[str] = field(default_factory=lambda: list(DEFAULT_PEOPLE))
+    # [{"name": "Weronika Chrabąszcz", "alternatywy": ["Wera", "Nika"]}, ...]
+    people: list[dict] = field(default_factory=lambda: [{"name": n, "alternatywy": []} for n in DEFAULT_PEOPLE])
     model: str = "large-v3-turbo"
     device: str = "auto"            # auto / cpu / cuda
     seconds: int = 30               # ile sekund od początku nagrania analizować
@@ -85,18 +86,25 @@ class Settings:
     window_geometry: str = ""
 
     def person_objects(self) -> list[Person]:
-        return [Person(name) for name in clean_people(self.people)]
+        return [Person(p["name"], tuple(p["alternatywy"])) for p in clean_people(self.people)]
 
 
-def clean_people(entries) -> list[str]:
-    """Lista osób bez pustych wpisów i powtórzeń (przyjmuje też stary zapis {"name": ...})."""
+def clean_people(entries) -> list[dict]:
+    """Lista osób bez pustych wpisów i powtórzeń. Przyjmuje też same nazwy (starszy zapis)."""
     result, seen = [], set()
     for entry in entries:
-        name = entry.get("name", "") if isinstance(entry, dict) else entry
+        if isinstance(entry, dict):
+            name, alternatives = entry.get("name", ""), entry.get("alternatywy", [])
+        else:
+            name, alternatives = entry, []
         name = " ".join(str(name).split())
-        if name and name.casefold() not in seen:
-            seen.add(name.casefold())
-            result.append(name)
+        if not name or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        if not isinstance(alternatives, str):
+            alternatives = ",".join(str(a) for a in alternatives)
+        alternatives = [a for a in parse_alternatives(alternatives) if a.casefold() != name.casefold()]
+        result.append({"name": name, "alternatywy": alternatives})
     return result
 
 

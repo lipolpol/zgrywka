@@ -234,7 +234,7 @@ def max_edits_episode(n: int) -> int:
 def _stems(word: str) -> list[str]:
     """Rdzenie do rozpoznawania form odmienionych: Weronika → weronik(i), Radek → radk(a)."""
     stems = [word]
-    if len(word) >= 5 and word[-1] in _VOWELS:
+    if len(word) >= 4 and word[-1] in _VOWELS:
         stems.append(word[:-1])
     if len(word) >= 5 and (word.endswith("ek") or word.endswith("ec")):
         stems.append(word[:-2] + word[-1])
@@ -250,7 +250,7 @@ def part_similarity(name: str, cand: str) -> float:
     if best < 1.0:
         best = max(best, Levenshtein.normalized_similarity(phonetic(name), phonetic(cand)) - 0.03)
         for stem in _stems(name):
-            if len(stem) >= 4 and cand.startswith(stem):
+            if len(stem) >= 3 and cand.startswith(stem):
                 suffix = cand[len(stem):]
                 # "Santii" po normalizacji daje "santi", czyli sam rdzeń
                 if suffix in _INFLECTION_SUFFIXES or (not suffix and stem != name):
@@ -317,7 +317,19 @@ def _episode_stem(word: str) -> str:
 
 @dataclass(frozen=True)
 class Person:
-    name: str  # tak trafi do nazwy folderu/pliku, np. "Marcel Gawroński"
+    name: str                           # tak trafi do nazwy folderu/pliku, np. "Weronika Chrabąszcz"
+    alternatives: tuple[str, ...] = ()  # wpisane przez użytkownika, np. ("Wera", "Nika", "Radosław Chaberko")
+
+
+def parse_alternatives(text: str) -> list[str]:
+    """'Wera, Nika; Werka' -> ['Wera', 'Nika', 'Werka'] (bez pustych i powtórzeń)."""
+    result, seen = [], set()
+    for part in re.split(r"[,;\n]", text or ""):
+        part = " ".join(part.split())
+        if part and part.casefold() not in seen:
+            seen.add(part.casefold())
+            result.append(part)
+    return result
 
 
 @dataclass
@@ -367,6 +379,21 @@ def _name_form(text: str) -> _NameForm | None:
     return _NameForm(first, len(words) - 1, words[-1], first + words[-1])
 
 
+def _person_forms(person: Person) -> list[_NameForm]:
+    """Imię i nazwisko oraz alternatywy. Jednowyrazowa alternatywa (zdrobnienie, np. "Wera")
+    działa jak inne imię tej osoby - sama i razem z jej nazwiskiem ("Wera Chrabąszcz")."""
+    main = _name_form(person.name)
+    forms = [main] if main else []
+    for alternative in person.alternatives:
+        form = _name_form(alternative)
+        if form is None or form in forms:
+            continue
+        if not form.last and main and main.last:
+            form = _NameForm(form.first, form.first_words, main.last, form.first + main.last)
+        forms.append(form)
+    return forms
+
+
 @dataclass
 class _Candidate:
     kind: str
@@ -383,11 +410,11 @@ class _Candidate:
 class PersonMatcher:
     def __init__(self, people: list[Person]):
         self.people = list(people)
-        self._forms: list[_NameForm | None] = [_name_form(p.name) for p in self.people]
+        self._forms: list[list[_NameForm]] = [_person_forms(p) for p in self.people]
         first_owners: dict[str, set[int]] = {}
         last_owners: dict[str, set[int]] = {}
-        for idx, form in enumerate(self._forms):
-            if form:
+        for idx, forms in enumerate(self._forms):
+            for form in forms:
                 first_owners.setdefault(form.first, set()).add(idx)
                 if form.last:
                     last_owners.setdefault(form.last, set()).add(idx)
@@ -454,44 +481,51 @@ class PersonMatcher:
         samo imię lub samo nazwisko (tuż przy nazwie odcinka)."""
         slots = slots or set()
         found = []
-        for idx, form in enumerate(self._forms):
-            if form is None:
-                continue
-            options: list[_Candidate] = []
-            first = self._best_part(tokens, form.first, form.first_words + 1,
-                                    _part_threshold(form.first, max_edits_first))
-            last = None
-            if form.last:
-                last = self._best_part(tokens, form.last, 3, _part_threshold(form.last, max_edits_last))
-                full = self._full_candidate(tokens, form)
-                if full:
-                    options.append(full)
-                if first and last:
-                    # imię i nazwisko padły, ale nie obok siebie - słabszy dowód niż para obok siebie
-                    lf, ll = len(form.first), len(form.last)
-                    score = (lf * first[0] + ll * last[0]) / (lf + ll) - 0.02
-                    parts = sorted([first[1:], last[1:]])
-                    heard = " … ".join(_heard(tokens, i, n) for i, n in parts)
-                    options.append(_Candidate(FULL, score, parts[0][0], heard))
-            unique_first = self._unique_first(form) or not form.last
-            if first and unique_first:
-                options.append(_Candidate(FIRST, first[0], first[1], _heard(tokens, first[1], first[2])))
-            if last and self._unique_last(form):
-                options.append(_Candidate(LAST, last[0], last[1], _heard(tokens, last[1], last[2])))
-            # luźno (tylko część liter) - wyłącznie tam, gdzie zwykle pada nazwisko
+        for idx, forms in enumerate(self._forms):
+            options = [c for form in forms for c in self._strict_options(tokens, form)]
             if not options and slots:
-                loose_first = self._best_loose_part(tokens, form.first, form.first_words + 1, slots)
-                if loose_first and unique_first:
-                    options.append(_Candidate(FIRST, loose_first[0], loose_first[1],
-                                              _heard(tokens, loose_first[1], loose_first[2]), loose=True))
-                if form.last and self._unique_last(form):
-                    loose_last = self._best_loose_part(tokens, form.last, 2, slots)
-                    if loose_last:
-                        options.append(_Candidate(LAST, loose_last[0], loose_last[1],
-                                                  _heard(tokens, loose_last[1], loose_last[2]), loose=True))
+                # luźno (tylko część liter) - wyłącznie tam, gdzie zwykle pada nazwisko
+                options = [c for form in forms for c in self._loose_options(tokens, form, slots)]
             if options:
                 found.append((idx, max(options, key=lambda c: c.rank)))
         return found
+
+    def _strict_options(self, tokens: list[Token], form: _NameForm) -> list[_Candidate]:
+        options: list[_Candidate] = []
+        first = self._best_part(tokens, form.first, form.first_words + 1,
+                                _part_threshold(form.first, max_edits_first))
+        last = None
+        if form.last:
+            last = self._best_part(tokens, form.last, 3, _part_threshold(form.last, max_edits_last))
+            full = self._full_candidate(tokens, form)
+            if full:
+                options.append(full)
+            if first and last:
+                # imię i nazwisko padły, ale nie obok siebie - słabszy dowód niż para obok siebie
+                lf, ll = len(form.first), len(form.last)
+                score = (lf * first[0] + ll * last[0]) / (lf + ll) - 0.02
+                parts = sorted([first[1:], last[1:]])
+                heard = " … ".join(_heard(tokens, i, n) for i, n in parts)
+                options.append(_Candidate(FULL, score, parts[0][0], heard))
+        if first and (self._unique_first(form) or not form.last):
+            options.append(_Candidate(FIRST, first[0], first[1], _heard(tokens, first[1], first[2])))
+        if last and self._unique_last(form):
+            options.append(_Candidate(LAST, last[0], last[1], _heard(tokens, last[1], last[2])))
+        return options
+
+    def _loose_options(self, tokens: list[Token], form: _NameForm, slots: set[int]) -> list[_Candidate]:
+        options: list[_Candidate] = []
+        if self._unique_first(form) or not form.last:
+            loose_first = self._best_loose_part(tokens, form.first, form.first_words + 1, slots)
+            if loose_first:
+                options.append(_Candidate(FIRST, loose_first[0], loose_first[1],
+                                          _heard(tokens, loose_first[1], loose_first[2]), loose=True))
+        if form.last and self._unique_last(form):
+            loose_last = self._best_loose_part(tokens, form.last, 2, slots)
+            if loose_last:
+                options.append(_Candidate(LAST, loose_last[0], loose_last[1],
+                                          _heard(tokens, loose_last[1], loose_last[2]), loose=True))
+        return options
 
     def ambiguous_surnames(self, tokens: list[Token]) -> list[Person]:
         """Osoby, których wspólne nazwisko padło w nagraniu (np. "Chaberko" = Radek lub Michał)."""
@@ -541,6 +575,8 @@ class EpisodeMatch:
     position: int | None = None
     length: int = 0             # liczba słów, które pasowały
     loose: bool = False
+    name: str = ""              # który z wpisanych odcinków
+    conflict: bool = False      # w nagraniu padło kilka różnych odcinków
 
 
 class EpisodeMatcher:
@@ -550,6 +586,8 @@ class EpisodeMatcher:
         self.joined = "".join(self.words)
         self.stem = "".join(_episode_stem(w) for w in self.words)
         self.forms = {self.joined, self.stem, phonetic(self.joined), phonetic(self.stem)}
+        if len(self.joined) <= 3:
+            self.forms = {self.joined}  # krótkie nazwy ("dom") tylko dokładnie, bez "fonetyki" ("tom")
         self.allowed = max_edits_episode(len(self.joined))
 
     @staticmethod
@@ -632,3 +670,34 @@ class EpisodeMatcher:
                 first = hit[1] if first is None else min(first, hit[1])
             return EpisodeMatch(True, 0.8, " … ".join(heard), first, 1)
         return EpisodeMatch()
+
+
+class MultiEpisodeMatcher:
+    """Kilka wpisanych odcinków naraz ("dom tratwy las") - który z nich padł w nagraniu."""
+
+    def __init__(self, episodes: list[str]):
+        self.matchers = [EpisodeMatcher(e) for e in episodes if e.strip()]
+        self.matchers = [m for m in self.matchers if m.joined]
+
+    def find_all(self, tokens: list[Token], near: int | None = None) -> list[EpisodeMatch]:
+        found = []
+        for matcher in self.matchers:
+            result = matcher.match(tokens, near)
+            if result.found:
+                result.name = matcher.episode
+                found.append(result)
+        return found
+
+    @staticmethod
+    def choose(found: list[EpisodeMatch], near: int | None = None) -> EpisodeMatch:
+        """Najpewniejszy odcinek: dokładny przed luźnym, najbliżej imienia, najlepszy wynik, najwcześniej."""
+        if not found:
+            return EpisodeMatch()
+
+        def key(r: EpisodeMatch):
+            distance = abs(r.position - near) if near is not None and r.position is not None else 0
+            return (not r.loose, -distance, round(r.score, 3), -(r.position or 0))
+
+        best = max(found, key=key)
+        best.conflict = len({r.name.casefold() for r in found}) > 1
+        return best

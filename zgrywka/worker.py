@@ -23,13 +23,13 @@ class AnalysisWorker(QThread):
     progress = Signal(int, int, float)          # zrobione, wszystkie, szacowany czas do końca [s]
     failed = Signal(str)
 
-    def __init__(self, engine: Engine, jobs: list[tuple[int, str]], people: list[Person], episode: str,
+    def __init__(self, engine: Engine, jobs: list[tuple[int, str]], people: list[Person], episodes: list[str],
                  seconds: int, use_hints: bool, second_pass: bool, parent=None):
         super().__init__(parent)
         self.engine = engine
         self.jobs = jobs
         self.people = people
-        self.episode = episode
+        self.episodes = episodes
         self.seconds = seconds
         self.use_hints = use_hints
         self.second_pass = second_pass
@@ -50,7 +50,7 @@ class AnalysisWorker(QThread):
             return
         self.engine_ready.emit(self.engine.description)
 
-        analyzer = Analyzer(self.engine, self.people, self.episode, self.seconds,
+        analyzer = Analyzer(self.engine, self.people, self.episodes, self.seconds,
                             self.use_hints, self.second_pass)
         started = time.monotonic()
         total = len(self.jobs)
@@ -65,7 +65,7 @@ class AnalysisWorker(QThread):
                 result = FileAnalysis(path, error=f"nieoczekiwany błąd: {exc}")
             log.info("%s -> %s / odcinek=%s / %s", path,
                      result.person.person.name if result.person.person else "-",
-                     result.episode.found, result.error or result.transcript[:200])
+                     result.episode.name or "-", result.error or result.transcript[:200])
             self.file_finished.emit(row, result)
             elapsed = time.monotonic() - started
             remaining = elapsed / (done + 1) * (total - done - 1)

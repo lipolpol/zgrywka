@@ -33,21 +33,31 @@ Potrzebny jest **Python 3.10–3.14**:
 
 ## Jak używać
 
-1. Wpisz **nazwę odcinka**, np. `tratwy`.
-2. Sprawdź listę **Osoby** po prawej stronie okna. Przyciskiem **„Dodaj osobę”** dopiszesz
-   nową osobę, dwuklikiem poprawisz nazwę, a przyciskiem **„Usuń”** usuniesz zaznaczone.
+1. Wpisz **nazwę odcinka**, np. `tratwy`. **Kilka odcinków** oddziel spacją, np. `dom tratwy las`.
+   Program sam rozpozna, który z nich pada w nagraniu. Nazwę z kilku słów wpisz w cudzysłowie,
+   np. `"stara chata" dom`.
+2. Sprawdź listę **Osoby** po prawej stronie okna:
+   - **„Dodaj”** dopisuje nową osobę,
+   - **dwuklik** (albo **„Edytuj”**) otwiera okno osoby: imię i nazwisko oraz **alternatywy**,
+     czyli zdrobnienia i przezwiska, np. *Weronika Chrabąszcz → Wera, Nika, Werka*,
+   - **„Usuń”** usuwa zaznaczone osoby.
 3. **Przeciągnij folder** z nagraniami do okna programu (albo kliknij ramkę i wybierz folder).
    Analiza ruszy sama.
 4. Sprawdź tabelę. Kolory oznaczają:
-   - 🟩 **zielony**: rozpoznano osobę i odcinek, więc plik trafi do folderu osoby;
+   - 🟩 **zielony**: rozpoznano osobę i odcinek, więc plik trafi do folderu odcinka i osoby;
    - 🟨 **żółty**: rozpoznano tylko osobę albo tylko odcinek, więc plik dostanie tylko nową nazwę;
    - 🟥 **czerwony**: nic nie rozpoznano;
    - ⬜ **szary**: pliku nie da się odczytać (zostanie bez zmian).
 
    Kolumna **„Co usłyszano”** pokazuje, co program zrozumiał z nagrania. Jeśli coś się nie zgadza,
-   kliknij komórkę w kolumnie **„Osoba”** i wybierz właściwą osobę (albo **„＋ Dodaj nową osobę…”**,
-   jeśli jej jeszcze nie ma na liście), a odcinek zaznacz lub odznacz. Prawy przycisk myszy zmienia
-   kilka zaznaczonych wierszy naraz. Dwuklik odtwarza nagranie.
+   kliknij komórkę **„Osoba”** (albo „Rozpoznanie”) i wybierz osobę z listy **albo wpisz własną**:
+   nowa osoba sama dopisze się do listy. Tak samo w kolumnie **„Odcinek”** wybierzesz jeden
+   z wpisanych odcinków albo wpiszesz własny. Prawy przycisk myszy zmienia kilka zaznaczonych
+   wierszy naraz.
+
+   **Odsłuch**: kliknij **▶** przy nagraniu (albo zrób dwuklik, albo wciśnij spację). Na dole okna
+   jest odtwarzacz jak w VLC: suwak do przewijania (także w godzinnych nagraniach), pauza, stop,
+   **10 s** w tył i w przód, **„od początku”** oraz **poprzednie** i **następne** nagranie.
 5. Kliknij **„Uporządkuj pliki”**.
 6. Jeśli coś poszło nie tak, kliknij **„Cofnij ostatnie”**: wszystkie pliki wrócą na swoje miejsca.
 
@@ -55,9 +65,9 @@ Potrzebny jest **Python 3.10–3.14**:
 
 | Co rozpoznano          | Co się dzieje z plikiem |
 |------------------------|-------------------------|
-| osoba **i** odcinek    | przeniesienie do folderu `Marcel Gawroński „tratwy”` jako `Marcel Gawroński „tratwy” 1.wav`, `… 2.wav`, … |
+| osoba **i** odcinek    | przeniesienie do folderu odcinka, a w nim do folderu osoby: `dom/Weronika Chrabąszcz „dom”/Weronika Chrabąszcz „dom” 1.wav`, `… 2.wav`, … |
 | tylko osoba            | zmiana nazwy w miejscu: `Marcel Gawroński „!!BRAK NAZWY FILMU!!” 1.wav` |
-| tylko odcinek          | zmiana nazwy w miejscu: `NIE WIEM KTO „tratwy” 1.wav` |
+| tylko odcinek          | zmiana nazwy w miejscu: `NIE WIEM KTO „dom” 1.wav` |
 | nic                    | zmiana nazwy w miejscu: `nie zidentyfikowany 1.wav` |
 
 - Numeracja idzie według kolejności oryginalnych nazw plików i **kontynuuje istniejące numery**.
@@ -71,8 +81,11 @@ Potrzebny jest **Python 3.10–3.14**:
 
 ### Jak program rozpoznaje osoby
 
-Program porównuje **litery**, więc nie trzeba wpisywać żadnych „innych form” ani typowych
-pomyłek. Wystarczy imię i nazwisko na liście.
+Program porównuje **litery**, więc nie trzeba wpisywać typowych pomyłek ani odmiany. Wystarczy imię
+i nazwisko na liście. **Alternatywy** (okno osoby) przydają się tylko na zupełnie inne formy, których
+z liter nie da się zgadnąć: zdrobnienia i przezwiska (*Wera, Nika, Werka*) albo pełne imię
+(*Radosław Chaberko* dla Radka). Jednowyrazowa alternatywa działa sama („Wera, dom”) i razem
+z nazwiskiem („Wera Chrabąszcz”).
 
 - **Przekręcone litery i polska wymowa**: „Radek **H**aberko” = Radek Chaberko,
   „Weronika Hrabążcz” = Weronika Chrabąszcz (ch = h, rz = ż, ó = u, w ≈ f, d ≈ t…).
@@ -97,7 +110,7 @@ pomyłek. Wystarczy imię i nazwisko na liście.
 ## Ustawienia
 
 - **Osoby** (panel po prawej w głównym oknie): dokładnie tak, jak tu wpiszesz imię i nazwisko,
-  tak będą nazwane foldery i pliki.
+  tak będą nazwane foldery i pliki. Lista razem z alternatywami zapisuje się sama.
 - **Zakładka „Ustawienia”**:
   - **Model**: „Dokładny (large-v3-turbo)” jest zalecany. „Szybki (small)” działa ok. 2–3 razy
     szybciej na słabszych komputerach, kosztem dokładności.
@@ -116,6 +129,7 @@ pomyłek. Wystarczy imię i nazwisko na liście.
 .venv/bin/python -m zgrywka /ścieżka/do/folderu --odcinek tratwy            # tylko podgląd
 .venv/bin/python -m zgrywka /ścieżka/do/folderu --odcinek tratwy --zastosuj # podgląd i porządkowanie
 ```
+Kilka odcinków: `--odcinek "dom tratwy las"`.
 Na Windows zamiast `.venv/bin/python` użyj `.venv\Scripts\python.exe`. Opcje: `--model small`,
 `--urzadzenie cpu`, `--sekundy 45`, `--podfoldery`.
 
@@ -144,12 +158,15 @@ z powyższej lokalizacji.
 
 ```
 zgrywka/
-  matching.py   rozmyte dopasowanie osób i nazwy odcinka (polska wymowa, odmiana, literówki)
+  matching.py   rozmyte dopasowanie osób (z alternatywami) i odcinków (polska wymowa, odmiana, literówki)
   analyzer.py   transkrypcja początku nagrania (z podpowiedzią i drugą próbą) + decyzja
   asr.py        faster-whisper: pobieranie modelu, bezpieczny wybór CPU/GPU
   audio.py      dekodowanie tylko początku pliku (PyAV), wyrównanie poziomu
-  naming.py     nazwy, numeracja, przenoszenie z dziennikiem i cofaniem
-  ui.py         okno (PySide6 / Qt)
+  naming.py     nazwy, foldery odcinków, numeracja, przenoszenie z dziennikiem i cofaniem
+  player.py     wbudowany odtwarzacz (PyAV + miniaudio) i jego pasek
+  results.py    tabela wyników i edycja osoby/odcinka
+  people.py     panel osób i okno osoby z alternatywami
+  ui.py         okno główne (PySide6 / Qt)
   worker.py     analiza w osobnym wątku
   cli.py        tryb tekstowy
 tests/          testy (pytest)

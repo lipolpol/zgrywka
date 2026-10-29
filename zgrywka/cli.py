@@ -9,13 +9,13 @@ import sys
 from . import config
 from .analyzer import Analyzer
 from .asr import MODELS, Engine
-from .naming import apply_moves, clean_episode, find_audio_files, make_target, merge_prior, parse_prior_label, plan_moves
+from .naming import apply_moves, find_audio_files, make_target, merge_prior, parse_episodes, parse_prior_label, plan_moves
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="zgrywka", description="Porządkowanie nagrań z mikroportów (tryb tekstowy).")
     parser.add_argument("folder", help="folder z nagraniami")
-    parser.add_argument("--odcinek", default="", help="nazwa odcinka, np. tratwy")
+    parser.add_argument("--odcinek", default="", help='nazwa odcinka, np. tratwy (kilka: "dom tratwy las")')
     parser.add_argument("--model", choices=list(MODELS), help="model rozpoznawania mowy")
     parser.add_argument("--urzadzenie", choices=["auto", "cpu", "cuda"], help="CPU / karta graficzna")
     parser.add_argument("--sekundy", type=int, help="ile sekund od początku nagrania analizować")
@@ -24,7 +24,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     settings = config.load_settings()
-    episode = clean_episode(args.odcinek)
+    episodes = parse_episodes(args.odcinek)
     folder = os.path.abspath(args.folder)
     files = find_audio_files(folder, args.podfoldery or settings.recursive)
     if not files:
@@ -38,7 +38,7 @@ def main(argv: list[str]) -> int:
     engine.load(on_status=print, on_download=progress)
     print("Model:", engine.description)
     people = settings.person_objects()
-    analyzer = Analyzer(engine, people, episode, args.sekundy or settings.seconds,
+    analyzer = Analyzer(engine, people, episodes, args.sekundy or settings.seconds,
                         settings.use_hints, settings.second_pass)
     items = []
     for i, path in enumerate(files, 1):
@@ -47,10 +47,10 @@ def main(argv: list[str]) -> int:
         if result.error:
             print(f"[{i}/{len(files)}] {name}: BŁĄD – {result.error} (plik zostaje bez zmian)")
             continue
-        prior = parse_prior_label(path, [p.name for p in people], episode)
-        person, found, _ = merge_prior(result.person.person.name if result.person.person else None,
-                                       result.episode.found, prior)
-        target = make_target(person, found, episode, settings.quote_style)
+        prior = parse_prior_label(path, [p.name for p in people], episodes)
+        person, episode, _ = merge_prior(result.person.person.name if result.person.person else None,
+                                         result.episode.name or None, prior)
+        target = make_target(person, episode, settings.quote_style)
         items.append((path, target))
         print(f"[{i}/{len(files)}] {name}: {target.label}   ({result.elapsed:.1f} s) „{result.transcript[:90]}”")
 

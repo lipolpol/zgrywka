@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 
 from .audio import AudioError, load_head
 from .matching import (
-    EpisodeMatch, EpisodeMatcher, Person, PersonMatch, PersonMatcher, mask_tokens, near_positions, tokenize,
+    EpisodeMatch, MultiEpisodeMatcher, Person, PersonMatch, PersonMatcher, mask_tokens, near_positions, tokenize,
 )
 
 
-def build_hints(people: list[Person], episode: str) -> str:
+def build_hints(people: list[Person], episodes: list[str]) -> str:
     """Podpowiedź dla modelu: poprawna pisownia nazwisk i nazwy odcinka.
 
     Celowo kończy się neutralnym zdaniem. Gdy podpowiedź kończyła się nazwiskiem albo nazwą
@@ -19,8 +19,9 @@ def build_hints(people: list[Person], episode: str) -> str:
     (traktował je jak tekst już zapisany).
     """
     parts = []
-    if episode.strip():
-        parts.append(f"Odcinek: {episode.strip()}.")
+    episodes = [e.strip() for e in episodes if e.strip()]
+    if episodes:
+        parts.append(("Odcinki: " if len(episodes) > 1 else "Odcinek: ") + ", ".join(episodes) + ".")
     names = ", ".join(p.name for p in people)
     if names:
         parts.append(f"Osoby: {names}.")
@@ -47,26 +48,26 @@ class FileAnalysis:
 class Recognizer:
     """Decyzja "kto i jaki odcinek" na podstawie transkrypcji (bez ponownego słuchania nagrania)."""
 
-    def __init__(self, people: list[Person], episode: str):
+    def __init__(self, people: list[Person], episodes: list[str]):
         self.persons = PersonMatcher(people)
-        self.episodes = EpisodeMatcher(episode)
+        self.episodes = MultiEpisodeMatcher(episodes)
 
     def match(self, text: str) -> tuple[PersonMatch, EpisodeMatch]:
         tokens = tokenize(text)
-        episode = self.episodes.match(tokens)
+        found = self.episodes.find_all(tokens)
         # Samo imię lub nazwisko z częścią liter przyjmujemy tylko tam, gdzie zwykle pada
         # przy przedstawianiu się: tuż przy nazwie odcinka (ale nie w niej samej).
         slots: set[int] = set()
-        person_tokens = tokens
-        if episode.found:
-            episode_words = range(episode.position, episode.position + episode.length)
+        hidden: set[int] = set()
+        for episode in found:
             slots |= near_positions(episode.position, len(tokens))
-            slots -= set(episode_words)
-            person_tokens = mask_tokens(tokens, episode_words)  # nazwa odcinka nie jest imieniem
-        person = self.persons.match(person_tokens, slots)
-        if not episode.found and person.person:
-            episode = self.episodes.match(tokens, near=person.position)
-        return person, episode
+            hidden |= set(range(episode.position, episode.position + episode.length))
+        slots -= hidden
+        person = self.persons.match(mask_tokens(tokens, hidden) if hidden else tokens, slots)
+        near = person.position if person.person else None
+        if not found and near is not None:
+            found = self.episodes.find_all(tokens, near=near)
+        return person, self.episodes.choose(found, near)
 
     def first_pass(self, text: str, hinted: bool) -> tuple[PersonMatch, EpisodeMatch]:
         person, episode = self.match(text)
@@ -88,12 +89,12 @@ class Recognizer:
 
 
 class Analyzer:
-    def __init__(self, engine, people: list[Person], episode: str, seconds: float = 30,
+    def __init__(self, engine, people: list[Person], episodes: list[str], seconds: float = 30,
                  use_hints: bool = True, second_pass: bool = True):
         self.engine = engine
-        self.recognizer = Recognizer(people, episode)
+        self.recognizer = Recognizer(people, episodes)
         self.seconds = seconds
-        self.hints = build_hints(people, episode) if use_hints else None
+        self.hints = build_hints(people, episodes) if use_hints else None
         self.second_pass = second_pass
 
     def analyze(self, path: str) -> FileAnalysis:
